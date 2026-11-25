@@ -23,6 +23,7 @@ app/static/js/
   explorer.js  Redfish-Rohdaten als Baum, Links auf @odata.id
   users.js · login.js · ui.js · util.js · icons.js · theme.js · api.js · session.js
 tests/mock_redfish.py  make_pdu() = generische DMTF-PDU · make_rittal() = Nachbau der echten Rittal 7979340 (Diagnose-Paket 25.11.2026); CLI: `python tests/mock_redfish.py 9101 42 rittal`
+tools/rittal_probe.py  liest /cgi-bin/json.cgi der Rittal-Weboberfläche aus (createSession, getDeviceDescriptions …), nur lesend, Ausgabe ohne Passwort/Token
 tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht erreichbare
 ```
 
@@ -35,6 +36,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - `Outlet.PowerControl` erlaubt nur On/Off → Neustart wird nachgebildet: einzeln Aus → `CYCLE_PAUSE` (5 s) → An; Auswahl: alle aus, warten, alle an.
 - Branches L1–L3 entsprechen den Phasen → Karte „Sicherungen“ wird dann ausgeblendet.
 - **Umbenennen:** PATCH auf `UserLabel` liefert immer 400 `ErrorValidating` (auch „Test“, jeder Socket; PATCH auf die PDU selbst: `key 'EquipmentType' not found`). `ElectricalConsumerNames` ist beschreibbar → `set_label()` probiert UserLabel und fällt auf `ElectricalConsumerNames:[name]` zurück (leer = `[]`), `label_field` merkt sich das. Anzeige: `label` = ElectricalConsumerNames[0] oder UserLabel, `pduLabel` = UserLabel.
+- **Weboberfläche** nutzt `POST /cgi-bin/json.cgi` (form-urlencoded `befehl={json}`): Login `createSession={"username","password","force":0}` → Cookie `sessionId` (+ `restSessionId`); Umbenennen `setValues={"variables":[{"deviceIndex":2,"variableIndex":139,"value":"…"}]}`; Variablenliste vermutlich aus `getDeviceDescriptions={"devices":[]}` (Zuordnung Socket → variableIndex noch offen).
 - Account braucht Redfish-Rechte (`apiuser` ohne Rechte → 401 auf Session und Basic).
 
 ## API
