@@ -6,6 +6,7 @@ wird HTTP-Basic verwendet. Messwerte werden kurz zwischengespeichert, damit mehr
 Browser die PDU nicht mehrfach abfragen.
 """
 import concurrent.futures as cf
+import json
 import re
 import threading
 import time
@@ -184,15 +185,32 @@ class PduClient:
 
     @staticmethod
     def _err_text(r):
+        """Fehlertext der PDU lesbar machen (Rittal packt ExtendedInfo teils als Liste in „message“)."""
         try:
             j = r.json().get("error", {})
-            ext = j.get("@Message.ExtendedInfo") or []
-            msg = (ext[0].get("Message") if ext and isinstance(ext[0], dict) else None) or j.get("message")
-            if msg:
-                return f"PDU meldet {r.status_code}: {msg}"
         except (ValueError, AttributeError):
-            pass
-        return f"PDU meldet HTTP {r.status_code}"
+            return f"PDU meldet HTTP {r.status_code}"
+        infos = j.get("@Message.ExtendedInfo") or []
+        msg = j.get("message")
+        if isinstance(msg, list):
+            infos = infos or msg
+            msg = None
+        if isinstance(msg, str) and msg.lstrip().startswith("["):
+            try:
+                infos = infos or json.loads(msg)
+                msg = None
+            except ValueError:
+                pass
+        parts = []
+        for i in infos if isinstance(infos, list) else []:
+            if isinstance(i, dict) and i.get("Message"):
+                t = i["Message"]
+                props = [str(x).lstrip("#/") for x in i.get("RelatedProperties") or []]
+                if props:
+                    t += f" ({', '.join(props)})"
+                parts.append(t)
+        text = "; ".join(parts) or (msg if isinstance(msg, str) else None)
+        return f"PDU meldet {r.status_code}: {text}" if text else f"PDU meldet HTTP {r.status_code}"
 
     def get(self, path):
         return self.request("GET", path)

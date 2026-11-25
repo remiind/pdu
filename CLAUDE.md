@@ -60,6 +60,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.2.1: Lesbare Fehlermeldungen der PDU (ExtendedInfo als Liste oder JSON-Text in „message“), Hinweis bei abgelehnter Beschreibung.
 - v0.2.0: Anpassung an echte Rittal-Daten (siehe „Rittal-Besonderheiten“): kein $expand, Chassis-Sensoren, Energie je Phase, Neustart-Nachbildung, Sockets ohne Messung, Kachel „Höchste Phasenlast“.
 - v0.1.3: Diagnose-Paket im Redfish-Explorer; Kurzstatus der PDU-Auswahl fängt alle Fehler je PDU ab.
 - v0.1.2: Nach fehlgeschlagener Anmeldung 5 min Pause je PDU (keine Account-Sperre durch Dauer-Fehlversuche).

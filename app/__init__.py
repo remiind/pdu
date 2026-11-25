@@ -13,7 +13,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 LABEL_MAX = 64
 
 CSP = (
@@ -252,7 +252,12 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
             abort(400, f"Beschreibung: höchstens {LABEL_MAX} Zeichen")
         label = label.strip()
         old = label_of(c, oid)
-        c.set_label(oid, label)
+        try:
+            c.set_label(oid, label)
+        except RedfishError as e:
+            if e.status == 400:
+                raise RedfishError(f"Die PDU akzeptiert die Beschreibung „{label}“ nicht – {e}", 400) from e
+            raise
         audit(c, oid, "Label", True, label=f"{old or ''} → {label}")
         return jsonify(ok=True)
 
