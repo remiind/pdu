@@ -62,7 +62,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - Schalten/Umbenennen braucht `control` (Admins immer). POST/PUT nur mit JSON (415).
 
 ## Konfiguration (.env)
-`PDU_LIST` (`Gruppe/Name=Host; …`), `PDU_USER`, `PDU_PASSWORD`, `PDU_VERIFY_TLS` (0), `PDU_CACHE_SECONDS` (2), `PDU_BACKGROUND` (1), `PDU_REFRESH` (10 s), `PDU_REFRESH_ACTIVE` (5 s), `PDU_HOST`/`PDU_TLS`/`PDU_HTTPS_PORT` (nur Standalone-Caddy). Gunicorn: 1 Worker (Sessions/Cache im Prozess), 16 Threads.
+`PDU_LIST` (`Gruppe/Name=Host; …`; Schlüssel = slug(Name), z. B. `lab-da-pdu001` – Umbenennen erlaubt: `migrate_keys()` ordnet beim Start alte Schlüssel über die Host-Adresse aus `cache/<alt>.json` dem neuen zu und zieht groups.json, pdu-settings.json, Cache und actions.jsonl mit um), `PDU_USER`, `PDU_PASSWORD`, `PDU_VERIFY_TLS` (0), `PDU_CACHE_SECONDS` (2), `PDU_BACKGROUND` (1), `PDU_REFRESH` (10 s), `PDU_REFRESH_ACTIVE` (5 s), `PDU_HOST`/`PDU_TLS`/`PDU_HTTPS_PORT` (nur Standalone-Caddy). Gunicorn: 1 Worker (Sessions/Cache im Prozess), 16 Threads.
 
 ## Befehle
 ```bash
@@ -75,6 +75,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.5.1: Untertitel „Rittal · Redfish“ und Hilfezeile der Steuerung entfernt; PDU-Namen in PDU_LIST umbenennbar ohne Datenverlust (Übernahme über die Adresse).
 - v0.5.0: Ansicht „Einbau“ (Standard): je Phase eine Spalte, Sockets wie montiert (42 oben … 01 unten), Lücken zwischen den Socket-Blöcken, einzeilige Kacheln; Einbaulage je PDU umschaltbar und für alle gespeichert.
 - v0.4.2: Kein „0 Sockets“ mehr nach PDU-Wechsel (einzelne Ausfälle abgefangen, halbe Stände verworfen, weniger parallele Abrufe); Gruppenfarben am Kachelrand (Standard Türkis, jede Gruppe eigene, stabile Farbe); kleinere Namen (20 Zeichen lesbar), breitere Steuerungsseite.
 - v0.4.1: Alle PDUs werden dauerhaft alle 10 s (angesehene alle 5 s) im Hintergrund gelesen; Seiten zeigen immer sofort den letzten Stand; Pause bei nicht erreichbaren PDUs; Mock mit realistischer Trägheit.

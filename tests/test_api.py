@@ -263,3 +263,23 @@ def test_orientation_setting(client):
     assert client.get("/api/pdus/labor-1").get_json()["settings"]["orient"] == "asc"
     assert client.get("/api/pdus/prestaging-1").get_json()["settings"]["orient"] == "desc"
     assert client.put("/api/pdus/labor-1/settings", json={"orient": "quer"}).status_code == 400
+
+
+def test_rename_pdu_keeps_data(tmp_path, monkeypatch, pdus):
+    """PDU in PDU_LIST umbenannt: Gruppen, Einbaulage, Stand und Protokoll ziehen über die Adresse mit."""
+    monkeypatch.setenv("PDU_USER", "apiuser")
+    monkeypatch.setenv("PDU_PASSWORD", "mock-secret-123")
+    a, _ = pdus
+    app = create_app(str(tmp_path), pdus=parse_list(f"Labor/PDU Labor 1={a.url}"), secure_cookies=False)
+    c = app.test_client()
+    c.post("/api/auth/setup", json={"name": "daniel", "password": "geheim12345"})
+    c.get("/api/pdus/pdu-labor-1")
+    c.put("/api/pdus/pdu-labor-1/groups", json={"ids": ["1"], "group": "Core"})
+    c.put("/api/pdus/pdu-labor-1/settings", json={"orient": "asc"})
+    app2 = create_app(str(tmp_path), pdus=parse_list(f"Labor/lab-da-pdu001={a.url}"), secure_cookies=False)
+    c2 = app2.test_client()
+    c2.post("/api/auth/login", json={"name": "daniel", "password": "geheim12345"})
+    assert app2.clients["lab-da-pdu001"].from_disk  # Stand übernommen
+    s = c2.get("/api/pdus/lab-da-pdu001").get_json()
+    assert s["outlets"][0]["group"] == "Core" and s["settings"]["orient"] == "asc" and s["name"] == "lab-da-pdu001"
+    assert c2.get("/api/log?pdu=lab-da-pdu001").get_json()[0]["action"] == "Group"

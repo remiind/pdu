@@ -14,7 +14,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -230,6 +230,82 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
             os.replace(tmp, os.path.join(cache_dir, c.key + ".json"))
         except OSError:
             pass
+
+    def norm_host(h):
+        return re.sub(r"^https?://", "", str(h or "")).rstrip("/").lower()
+
+    def migrate_keys():
+        """PDU in PDU_LIST umbenannt → neuer Schlüssel. Alte Daten (Gruppen, Farben bleiben, Einbaulage, Stand,
+        Protokoll) über die Adresse der PDU dem neuen Schlüssel zuordnen, damit nichts verloren geht."""
+        by_host = {norm_host(c.host): k for k, c in clients.items()}
+        moves = {}
+        for fn in os.listdir(cache_dir):
+            old = fn[:-5] if fn.endswith(".json") else None
+            if not old or old in clients:
+                continue
+            try:
+                with open(os.path.join(cache_dir, fn), "r", encoding="utf-8") as fh:
+                    host = norm_host(json.load(fh).get("host"))
+            except (OSError, ValueError):
+                continue
+            new = by_host.get(host)
+            if new and not os.path.exists(os.path.join(cache_dir, new + ".json")):
+                moves[old] = new
+        if not moves:
+            return
+        for old, new in moves.items():
+            src = os.path.join(cache_dir, old + ".json")
+            try:
+                with open(src, "r", encoding="utf-8") as fh:
+                    snap = json.load(fh)
+                snap["key"], snap["name"] = new, clients[new].name
+                with open(os.path.join(cache_dir, new + ".json"), "w", encoding="utf-8") as fh:
+                    json.dump(snap, fh, ensure_ascii=False, separators=(",", ":"))
+                os.unlink(src)
+            except (OSError, ValueError):
+                pass
+        for path in (groups_path, settings_path):
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    d = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            changed = False
+            for old, new in moves.items():
+                if old in d and new not in d:
+                    d[new] = d.pop(old)
+                    changed = True
+            if changed:
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(d, fh, ensure_ascii=False, indent=1)
+                os.replace(tmp, path)
+        try:
+            with open(log_path, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+            out = []
+            for ln in lines:
+                try:
+                    e = json.loads(ln)
+                except ValueError:
+                    out.append(ln)
+                    continue
+                if e.get("pdu") in moves:
+                    e["pdu"] = moves[e["pdu"]]
+                    e["pduName"] = clients[e["pdu"]].name
+                out.append(json.dumps(e, ensure_ascii=False) + "\n")
+            tmp = log_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.writelines(out)
+            os.replace(tmp, log_path)
+        except OSError:
+            pass
+        app.logger.warning("PDU-Schlüssel umgezogen: %s", moves)
+
+    try:
+        migrate_keys()
+    except Exception:  # noqa: BLE001 – Übernahme darf den Start nie verhindern
+        app.logger.exception("Übernahme alter PDU-Schlüssel fehlgeschlagen")
 
     for c in clients.values():  # gespeicherten Stand laden → erste Anzeige nach Neustart sofort
         c.from_disk = False

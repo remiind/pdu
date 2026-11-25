@@ -39,7 +39,7 @@ export function sidebar(active) {
   const key = session.pdu ? `/${session.pdu}` : '';
   const a = (href, k, icon, label) => h('a', { href, class: active === k ? 'on' : '' }, I(icon), label);
   return h('aside', { class: 'side' },
-    h('div', { class: 'brand' }, h('span', { class: 'mark', 'aria-hidden': 'true' }), h('div', null, h('b', null, 'PDU'), h('small', null, 'Rittal · Redfish'))),
+    h('div', { class: 'brand' }, h('span', { class: 'mark', 'aria-hidden': 'true' }), h('div', null, h('b', null, 'PDU'))),
     h('nav', null,
       a(`#/monitor${key}`, 'monitor', 'pulse', 'Monitoring'),
       a(`#/control${key}`, 'control', 'power', 'Steuerung'),

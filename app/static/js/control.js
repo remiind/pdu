@@ -75,7 +75,7 @@ export async function renderControl(root, routeKey) {
   const logBody = h('div', { class: 'scroll' });
   main.classList.add('cmain');
   main.replaceChildren(...[
-    h('header', { class: 'page phead' }, h('div', null, h('h1', null, 'Steuerung'), h('p', { class: 'sub' }, 'Schalter = sofort schalten · Klick auf die Kachel = auswählen (Umschalt = Bereich) · Doppelklick = bearbeiten')),
+    h('header', { class: 'page phead' }, h('div', null, h('h1', null, 'Steuerung')),
       h('div', { class: 'phead-r' }, stamp, h('button', { type: 'button', class: 'btn', onclick: () => loop.now(true) }, I('refresh'), 'Aktualisieren'))),
     pick.el,
     !canControl && h('div', { class: 'flash warn' }, 'Dein Konto darf die Sockets nur ansehen, nicht schalten.'),
