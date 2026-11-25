@@ -128,3 +128,11 @@ def test_basic_fallback(tmp_path, monkeypatch):
         assert r.status_code == 502 and "nächster Versuch" in r.get_json()["error"] and m.app.state["calls"] == n
     finally:
         m.stop()
+
+
+def test_diag(client):
+    r = client.get("/api/admin/diag/labor-1")
+    assert r.status_code == 200 and "attachment" in r.headers["Content-Disposition"]
+    d = r.get_json()
+    assert d["auth_mode"] == "Session" and "/redfish/v1/PowerEquipment/RackPDUs/1/Outlets/1" in d["data"]
+    assert "mock-secret" not in r.get_data(as_text=True)

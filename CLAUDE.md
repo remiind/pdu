@@ -32,6 +32,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
   - Outlet: `{id,num,name,label(UserLabel),type(C13/C19/…),state(PowerState),locked,phase(L1–L3 aus ElectricalContext oder Branch),branch,current,power,energy,voltage,rated,target,health,status}`
   - Phasen aus einem Mains-Kreis mit `PolyPhase*` **oder** aus je einem Mains-Kreis pro Phase.
 - `POST /api/pdus/<key>/outlets/<id>/power {action:On|Off|PowerCycle}` · `POST /api/pdus/<key>/power {ids[],action}` (nacheinander) · `PUT /api/pdus/<key>/outlets/<id> {label}` → PATCH `UserLabel`
+- `GET /api/admin/diag/<key>` = Diagnose-Paket (Rohdaten PDU, Mains, Branches, 3 Outlets, Sensoren, DataSourceUri-Verweise, $expand-Test, Zeiten; Knopf im Redfish-Explorer)
 - `GET /api/log?pdu=<key>` (letzte 100) · `GET /api/admin/redfish/<key>?path=/redfish/v1/…` (nur GET, nur Admin)
 - Schalten/Umbenennen braucht `control` (Admins immer). POST/PUT nur mit JSON (415).
 
@@ -49,6 +50,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.1.3: Diagnose-Paket im Redfish-Explorer; Kurzstatus der PDU-Auswahl fängt alle Fehler je PDU ab.
 - v0.1.2: Nach fehlgeschlagener Anmeldung 5 min Pause je PDU (keine Account-Sperre durch Dauer-Fehlversuche).
 - v0.1.1: Anmeldung: Rückfall auf Basic-Auth, wenn die PDU keine Session anlegt; ausführliche Fehlermeldung.
 - v0.1.0: Monitoring, Steuerung, Redfish-Explorer, Benutzer mit Recht „Schalten“, Schaltprotokoll. Feldzuordnung nach DMTF-Schema; gegen echte Rittal-PDUs noch zu prüfen (Explorer nutzen, falls Werte fehlen).

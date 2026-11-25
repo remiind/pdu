@@ -288,6 +288,64 @@ class PduClient:
                 res[k] = f.result()
         return normalize(self, pdu, res)
 
+    def diagnose(self):
+        """Rohdaten für die Fehlersuche: alle relevanten Ressourcen einer PDU (ohne Zugangsdaten)."""
+        out, t0 = {"host": self.host, "auth_mode": None, "expand": None, "errors": {}, "timing": {}, "data": {}}, time.time()
+
+        def grab(path, label=None):
+            t = time.time()
+            try:
+                out["data"][label or path] = self.get(path)
+            except RedfishError as e:
+                out["errors"][label or path] = str(e)
+            out["timing"][label or path] = round(time.time() - t, 2)
+            return out["data"].get(label or path) or {}
+
+        def members(col):
+            return [_odata(m) for m in (col.get("Members") or []) if _odata(m)]
+
+        grab("/redfish/v1")
+        grab("/redfish/v1/PowerEquipment")
+        col = grab("/redfish/v1/PowerEquipment/RackPDUs")
+        pp = (members(col) or [None])[0]
+        if not pp:
+            return out
+        pdu = grab(pp)
+        for name, n in (("Mains", 9), ("Branches", 9), ("Outlets", 3), ("Sensors", 12)):
+            c = grab(_odata(pdu.get(name)) or f"{pp}/{name}")
+            for m in members(c)[:n]:
+                grab(m)
+        grab(_odata(pdu.get("Metrics")) or f"{pp}/Metrics")
+        # Sensor-Verweise (DataSourceUri) aus Outlet/Mains/Branch nachladen
+        refs = set()
+
+        def walk(v):
+            if isinstance(v, dict):
+                for k, x in v.items():
+                    if k == "DataSourceUri" and isinstance(x, str):
+                        refs.add(x)
+                    else:
+                        walk(x)
+            elif isinstance(v, list):
+                for x in v:
+                    walk(x)
+        walk({k: v for k, v in out["data"].items() if "/Outlets/" in k or "/Mains/" in k or "/Branches/" in k})
+        for r in sorted(refs)[:40]:
+            if r not in out["data"]:
+                grab(r)
+        # $expand testen
+        t = time.time()
+        try:
+            e = self.get(f"{pp}/Outlets?$expand=.($levels=1)")
+            mem = e.get("Members") or []
+            out["expand"] = {"ok": bool(mem) and all("Id" in m for m in mem if isinstance(m, dict)), "members": len(mem), "sample": mem[:1]}
+        except RedfishError as ex:
+            out["expand"] = {"ok": False, "error": str(ex)}
+        out["timing"]["$expand Outlets"] = round(time.time() - t, 2)
+        out["auth_mode"] = self.auth_mode
+        out["timing"]["gesamt"] = round(time.time() - t0, 2)
+        return out
+
     def _sensors(self, path):
         col = self.get(path)
         mem = col.get("Members") or []

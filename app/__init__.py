@@ -12,7 +12,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .auth import can_control, init_auth
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 LABEL_MAX = 64
 
 CSP = (
@@ -172,6 +172,9 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
             except RedfishError as e:
                 c.last_error = str(e)
                 return p["key"], {"ok": False, "error": str(e)}
+            except Exception as e:  # noqa: BLE001 – eine PDU darf die Liste nicht kaputt machen
+                app.logger.exception("summary %s", p["key"])
+                return p["key"], {"ok": False, "error": f"{e.__class__.__name__}: {e}"}
         if not conf:
             return jsonify({})
         with cf.ThreadPoolExecutor(max_workers=len(conf)) as ex:
@@ -253,6 +256,15 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
             if len(out) >= 100:
                 break
         return jsonify(out)
+
+    @app.get("/api/admin/diag/<key>")
+    def diag(key):
+        app.need_admin()
+        c = client(key)
+        data = {"app": VERSION, "pdu": key, "name": c.name, "ts": int(time.time()), "lastError": c.last_error, **c.diagnose()}
+        resp = jsonify(data)
+        resp.headers["Content-Disposition"] = f'attachment; filename="pdu-diagnose-{key}.json"'
+        return resp
 
     @app.get("/api/admin/redfish/<key>")
     def raw(key):

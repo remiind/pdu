@@ -64,7 +64,8 @@ export async function renderExplorer(root, routeKey, initialPath) {
     h('header', { class: 'page' }, h('h1', null, 'Redfish-Explorer'), h('p', { class: 'sub' }, 'Rohdaten der PDU lesen (nur GET). Hilfreich, wenn ein Wert in Monitoring oder Steuerung fehlt.')),
     pick.el,
     h('form', { class: 'card xform', onsubmit: (e) => { e.preventDefault(); go(path.value.trim()); } },
-      h('div', { class: 'xrow' }, path, h('button', { class: 'primary', type: 'submit' }, I('search'), 'Abrufen')),
+      h('div', { class: 'xrow' }, path, h('button', { class: 'primary', type: 'submit' }, I('search'), 'Abrufen'),
+        h('a', { class: 'btn', href: `/api/admin/diag/${encodeURIComponent(key)}`, download: `pdu-diagnose-${key}.json`, title: 'Alle relevanten Redfish-Daten dieser PDU als eine Datei (ohne Zugangsdaten)' }, I('code'), 'Diagnose-Paket')),
       h('div', { class: 'views' }, SHORTCUTS.map(([l, p]) => h('a', { href: '#', dataset: { p }, onclick: (e) => { e.preventDefault(); go(e.currentTarget.dataset.p); } }, l)))),
     out);
   // Kurzwahl auf den tatsächlichen PDU-Pfad dieser PDU anpassen (Id ist nicht immer „1“)
