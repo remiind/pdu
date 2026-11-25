@@ -274,12 +274,16 @@ def make_rittal(n_outlets=42, sid="43090021", delay=0.0):
 
     @app.get(P + "/Outlets")
     def outl():
+        if state.get("fail_collection"):
+            return jsonify(error={"code": "Base.1.21.GeneralError", "message": "busy"}), 503
         if "$expand" in request.query_string.decode():
             return jsonify({"Members": [outlet_json(i, short=True) for i in outlets], "Members@odata.count": len(outlets)})
         return jsonify({"Members": [{"@odata.id": f"{P}/Outlets/{i}"} for i in outlets], "Members@odata.count": len(outlets)})
 
     @app.get(P + "/Outlets/<oid>")
     def outlet(oid):
+        if oid in state.get("fail", set()):
+            return jsonify(error={"code": "Base.1.21.GeneralError", "message": "busy"}), 503
         return jsonify(outlet_json(oid))
 
     @app.patch(P + "/Outlets/<oid>")

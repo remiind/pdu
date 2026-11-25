@@ -14,7 +14,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -48,6 +48,9 @@ def parse_list(raw):
 
 
 GROUP_MAX = 32
+# Gruppenfarben (ohne Türkis = „keine Gruppe“, ohne Rot/Grün = Status); jede Gruppe bekommt die nächste freie Farbe
+GROUP_COLORS = ["#3b82f6", "#f59e0b", "#a855f7", "#ec4899", "#84cc16", "#6366f1", "#f97316", "#0ea5e9", "#d946ef", "#a16207",
+                "#64748b", "#be185d"]
 WATCH_S = 600                                           # so lange nach dem letzten Aufruf gilt eine PDU als „angesehen“
 WARM_S = float(os.environ.get("PDU_REFRESH_ACTIVE", "5"))   # angesehene PDUs: so oft im Hintergrund neu lesen
 IDLE_S = float(os.environ.get("PDU_REFRESH", "10"))         # alle anderen: dauerhaft so oft (Cache immer frisch)
@@ -82,7 +85,7 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
     os.makedirs(cache_dir, exist_ok=True)
 
     # ---------- Gruppen (in der App gespeichert: {pdu: {socket-id: gruppe}}) ----------
-    def groups_load():
+    def groups_raw():
         try:
             with open(groups_path, "r", encoding="utf-8") as fh:
                 d = json.load(fh)
@@ -90,10 +93,18 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
         except (OSError, ValueError):
             return {}
 
+    def groups_load():
+        """{pdu-key: {socket-id: gruppe}} (ohne Verwaltungsfelder)."""
+        return {k: v for k, v in groups_raw().items() if not k.startswith("_") and isinstance(v, dict)}
+
+    def group_colors():
+        cols = groups_raw().get("_colors")
+        return cols if isinstance(cols, dict) else {}
+
     def groups_set(key, ids, group):
         with open(groups_path + ".lock", "a+") as lk:
             fcntl.flock(lk, fcntl.LOCK_EX)
-            d = groups_load()
+            d = groups_raw()
             per = d.setdefault(key, {})
             for oid in ids:
                 if group:
@@ -102,6 +113,13 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
                     per.pop(oid, None)
             if not per:
                 d.pop(key, None)
+            # Farben: nur für noch benutzte Gruppen behalten, neue Gruppe → erste freie Farbe
+            used = {g for k, v in d.items() if not k.startswith("_") and isinstance(v, dict) for g in v.values()}
+            cols = {g: c for g, c in (d.get("_colors") or {}).items() if g in used}
+            for g in sorted(used - set(cols)):
+                free = [c for c in GROUP_COLORS if c not in cols.values()]
+                cols[g] = free[0] if free else GROUP_COLORS[len(cols) % len(GROUP_COLORS)]
+            d["_colors"] = cols
             tmp = groups_path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(d, fh, ensure_ascii=False, indent=1)
@@ -115,6 +133,7 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
         out = dict(snap)
         out["outlets"] = [{**o, "group": mine.get(o["id"], "")} for o in snap["outlets"]]
         out["groups"] = sorted({g for per in all_groups.values() for g in per.values()}, key=str.lower)
+        out["groupColors"] = group_colors()
         out["age"] = round(max(0.0, time.time() - snap["ts"]), 1)
         return out
 

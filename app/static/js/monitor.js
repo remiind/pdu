@@ -1,5 +1,5 @@
 // Monitoring: Live-Werte einer PDU (Phasen, Leistung, Sicherungen, Verbrauch je Socket)
-import { ago, fmt, h, svgEl, watts } from './util.js';
+import { ago, fmt, groupColor, h, setGroupColors, svgEl, watts } from './util.js';
 import { api } from './api.js';
 import { I, choosePdu, every, page, picker } from './shell.js';
 
@@ -141,7 +141,7 @@ export async function renderMonitor(root, routeKey) {
         return h('tr', { class: o.state === 'Off' ? 'dim' : '' },
           h('td', { class: 'num mono' }, String(o.num ?? o.id).padStart(2, '0')),
           h('td', null, o.label || h('span', { class: 'muted' }, o.name || '–')),
-          hasGroups && h('td', null, o.group ? h('span', { class: 'gchip' }, o.group) : ''),
+          hasGroups && h('td', null, o.group ? (() => { const c = h('span', { class: 'gchip' }, o.group); c.style.setProperty('--gc', groupColor(o.group)); return c; })() : ''),
           h('td', null, o.type ? h('span', { class: 'tchip' }, o.type) : '–'),
           h('td', { class: 'muted' }, o.phase || '–'),
           h('td', null, stateBadge(o.state)),
@@ -213,6 +213,7 @@ export async function renderMonitor(root, routeKey) {
   async function load(force) {
     try {
       snap = await api.pdu(key, force === true);
+      setGroupColors(snap.groupColors);
       pushHist(key, snap);
       draw();
       stamp.textContent = `Stand ${new Date(snap.ts * 1000).toLocaleTimeString('de-DE')}`;

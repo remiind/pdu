@@ -1,5 +1,5 @@
 // Steuerung: Sockets einer PDU schalten (einzeln oder als Auswahl), benennen, gruppieren, Verlauf
-import { ago, fmt, h, time, watts } from './util.js';
+import { ago, fmt, groupColor, h, setGroupColors, time, watts } from './util.js';
 import { api } from './api.js';
 import { session } from './session.js';
 import { confirmBox, modal, toast } from './ui.js';
@@ -140,6 +140,8 @@ export async function renderControl(root, routeKey) {
       ph.hidden = !o.phase || prefs.view === 'phase';
       grp.textContent = o.group || '';
       grp.hidden = !o.group || prefs.view === 'group';
+      const gc = groupColor(o.group);
+      if (gc) { el.style.setProperty('--gc', gc); grp.style.setProperty('--gc', gc); } else { el.style.removeProperty('--gc'); }
       info.textContent = pending ? 'schaltet …' : on && o.power !== null ? `${watts(o.power)}` : o.state && o.state !== 'On' && o.state !== 'Off' ? o.state : '';
       sw.setAttribute('aria-checked', on ? 'true' : 'false');
       sw.setAttribute('aria-label', `Socket ${pad(o)} ${on ? 'ausschalten' : 'einschalten'}`);
@@ -197,8 +199,10 @@ export async function renderControl(root, routeKey) {
       if (s.title) heads.push({ ...s, el: info });
       const pickAll = s.kind === 'group' && s.g && canControl
         ? h('button', { type: 'button', class: 'linkbtn', onclick: () => { s.items.forEach((o) => st.sel.add(o.id)); refresh(); } }, 'Gruppe auswählen') : null;
+      const dot = s.kind === 'group' ? h('span', { class: 'gdot' }) : null;
+      if (dot) { if (s.g) dot.style.setProperty('--gc', groupColor(s.g)); else dot.classList.add('none'); }
       return h('section', { class: 'cgroup' },
-        s.title && h('div', { class: 'cghead' }, h('b', null, s.title), info, pickAll),
+        s.title && h('div', { class: 'cghead' }, dot, h('b', null, s.title), info, pickAll),
         h('div', { class: 'socks' }, s.items.map((o) => tiles.get(o.id).el)));
     }));
     refresh();
@@ -309,7 +313,7 @@ export async function renderControl(root, routeKey) {
       st.sel.clear();
       toast(g ? `${outs.length} Sockets in Gruppe „${g}“.` : `${outs.length} Sockets aus ihrer Gruppe genommen.`);
     } catch (e) { toast(e.message, 'err'); }
-    layout(); loadLog();
+    layout(); loadLog(); loop.now(); // holt u. a. die vom Server vergebene Gruppenfarbe
   }
 
   async function loadLog() {
@@ -332,6 +336,7 @@ export async function renderControl(root, routeKey) {
     try {
       snap = await api.pdu(key, force === true);
       session.snap = snap;
+      setGroupColors(snap.groupColors);
       if (firstLayout || layoutKey(sections(visible())) !== laidOut) { firstLayout = false; layout(); } else { chips(); refresh(); }
       const stale = snap.age > 20;
       stamp.textContent = `Stand ${new Date(snap.ts * 1000).toLocaleTimeString('de-DE')}${stale ? ' · wird aktualisiert …' : ''}`;

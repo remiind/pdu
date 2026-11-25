@@ -111,6 +111,7 @@ class PduClient:
         self._snap_t = 0.0
         self._snap_lock = threading.Lock()
         self._pdu_path = None
+        self._raw = {}  # letzter Rohstand je Ressource (Ersatz, wenn ein einzelner Abruf ausfällt)
         self._sens_ids = None  # Chassis-Sensoren (Energie je Phase, Frequenz …)
         self._sens_t = 0.0
         self.last_error = None
@@ -248,8 +249,23 @@ class PduClient:
         links = [_odata(m) for m in col.get("Members") or [] if _odata(m)]
         if not links:
             return []
-        with cf.ThreadPoolExecutor(max_workers=min(12, len(links))) as ex:
-            return list(ex.map(self.get, links))
+
+        def one(u):
+            try:
+                d = self.get(u)
+                self._raw[u] = d
+                return d
+            except RedfishError:
+                # einzelner Ausreißer (PDU kurz überlastet): letzten bekannten Stand dieses Mitglieds nehmen
+                return self._raw.get(u)
+
+        # 4 gleichzeitige Abrufe reichen: die PDU arbeitet ohnehin nacheinander, mehr überlastet ihren Webserver
+        with cf.ThreadPoolExecutor(max_workers=min(4, len(links))) as ex:
+            items = list(ex.map(one, links))
+        missing = sum(1 for x in items if x is None)
+        if missing:
+            raise RedfishError(f"{missing} von {len(links)} Einträgen unter {path.rsplit('/', 1)[-1]} nicht lesbar", 502)
+        return items
 
     def _opt(self, fn, *a):
         try:
@@ -326,7 +342,15 @@ class PduClient:
             futs = {k: ex.submit(self._opt, fn, arg) for k, (fn, arg) in jobs.items()}
             for k, f in futs.items():
                 res[k] = f.result()
-        return normalize(self, pdu, res)
+        # Ohne Sockets ist der Stand unbrauchbar → Fehler, der letzte gute Stand bleibt stehen
+        if res["outlets"] is None or (not res["outlets"] and self._snap and self._snap.get("outlets")):
+            raise RedfishError("Sockets konnten gerade nicht gelesen werden (PDU ausgelastet?) – letzter Stand bleibt", 502)
+        if res["mains"] is None and self._snap:
+            res["mains"] = None  # Phasen fehlen nur kurz: unten aus dem letzten Stand übernehmen
+        snap = normalize(self, pdu, res)
+        if not snap["phases"] and self._snap and self._snap.get("phases"):
+            snap["phases"], snap["totals"] = self._snap["phases"], {**self._snap["totals"], **{k: v for k, v in snap["totals"].items() if v is not None}}
+        return snap
 
     def diagnose(self):
         """Rohdaten für die Fehlersuche: alle relevanten Ressourcen einer PDU (ohne Zugangsdaten)."""

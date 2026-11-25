@@ -53,3 +53,16 @@ export function ago(ts) {
 }
 
 export const time = (ts) => new Date(ts * 1000).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+// Gruppenfarben vergibt der Server (jede Gruppe ihre eigene, stabil); setGroupColors() übernimmt sie aus der Momentaufnahme.
+// Ohne Zuordnung (z. B. gerade erst angelegt) Ersatz über den Namen. Keine Gruppe = Türkis (CSS).
+const FALLBACK = ['#3b82f6', '#f59e0b', '#a855f7', '#ec4899', '#84cc16', '#6366f1', '#f97316', '#0ea5e9', '#d946ef', '#a16207'];
+let COLORS = {};
+export const setGroupColors = (map) => { COLORS = map || {}; };
+export function groupColor(name) {
+  if (!name) return '';
+  if (COLORS[name]) return COLORS[name];
+  let hsh = 0;
+  for (const ch of name) hsh = (hsh * 31 + ch.codePointAt(0)) >>> 0;
+  return FALLBACK[hsh % FALLBACK.length];
+}

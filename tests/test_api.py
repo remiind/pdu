@@ -195,6 +195,13 @@ def test_groups(client):
     assert client.put("/api/pdus/labor-1/groups", json={"ids": ["99"], "group": "x"}).status_code == 404
     assert client.put("/api/pdus/labor-1/groups", json={"ids": ["1"], "group": "x" * 40}).status_code == 400
     assert client.get("/api/log?pdu=labor-1").get_json()[0]["action"] == "Group"
+    client.put("/api/pdus/labor-1/groups", json={"ids": ["5"], "group": "Core"})
+    client.put("/api/pdus/labor-1/groups", json={"ids": ["6"], "group": "Backup"})
+    cols = client.get("/api/pdus/labor-1").get_json()["groupColors"]
+    assert set(cols) == {"Teststack 1", "Core", "Backup"} and len(set(cols.values())) == 3  # jede Gruppe eigene Farbe
+    first = cols["Teststack 1"]
+    client.put("/api/pdus/labor-1/groups", json={"ids": ["7"], "group": "Aaa neu"})
+    assert client.get("/api/pdus/labor-1").get_json()["groupColors"]["Teststack 1"] == first  # bleibt stabil
 
 
 def test_background_and_disk_cache(tmp_path, monkeypatch, pdus):
@@ -230,3 +237,21 @@ def test_serves_cache_immediately(tmp_path, monkeypatch, pdus):
     app.clients["a"]._snap = {**app.clients["a"]._snap, "ts": _t.time() - 300}  # künstlich alt
     r = c.get("/api/pdus/a").get_json()
     assert r["age"] >= 299  # sofort aus dem Speicher, nicht direkt gelesen
+
+
+def test_partial_failures_keep_sockets(monkeypatch):
+    """Ein einzelner Socket-Ausfall nimmt den letzten Wert; fällt die Liste aus, bleibt der letzte gute Stand."""
+    from app.redfish import PduClient, RedfishError
+    m = Running(make_rittal(42))
+    try:
+        c = PduClient("r", "R", m.url, "apiuser", "mock-secret-123")
+        assert len(c.snapshot(force=True)["outlets"]) == 42
+        m.app.state["fail"] = {"L1_5", "L2_20"}
+        s = c.snapshot(force=True)
+        assert len(s["outlets"]) == 42 and s["outlets"][4]["id"] == "L1_5"
+        m.app.state["fail_collection"] = True
+        with pytest.raises(RedfishError):
+            c.snapshot(force=True)
+        assert len(c._snap["outlets"]) == 42  # guter Stand bleibt
+    finally:
+        m.stop()
