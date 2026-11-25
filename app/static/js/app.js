@@ -18,7 +18,7 @@ async function route() {
   try { await current?.destroy?.(); } catch (e) { console.error(e); }
   current = null;
   const m = location.hash.match(/^#\/(monitor|control|explorer|users)(?:\/([\w-]+))?/);
-  const [, view = 'monitor', key = ''] = m || [];
+  const [, view = 'control', key = ''] = m || [];
   const titles = { monitor: 'Monitoring', control: 'Steuerung', explorer: 'Redfish-Explorer', users: 'Benutzer' };
   let v;
   if (view === 'users' && session.user?.admin) v = await renderUsers(root);
@@ -43,5 +43,5 @@ async function start() {
 
 setUnauthHandler(() => { if (session.user) { session.user = null; start(); } });
 window.addEventListener('hashchange', () => { if (session.user) route(); });
-window.addEventListener('pdu:logout', async () => { try { await api.logout(); } catch { /* ignore */ } session.user = null; location.hash = '#/monitor'; start(); });
+window.addEventListener('pdu:logout', async () => { try { await api.logout(); } catch { /* ignore */ } session.user = null; location.hash = '#/control'; start(); });
 start();

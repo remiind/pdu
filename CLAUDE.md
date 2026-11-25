@@ -17,7 +17,7 @@ app/redfish.py    PduClient (Collections immer einzeln parallel laden – **kein
 app/auth.py       Benutzer/Login aus Plan übernommen (users.json, scrypt, Cookie pdu_session); Flag `control` (False = nur ansehen)
 app/templates/index.html  SPA, lädt js/app.js
 app/static/js/
-  app.js       Hash-Router: #/monitor[/<key>], #/control[/<key>], #/explorer[/<key>] (Admin), #/users (Admin)
+  app.js       Hash-Router: #/monitor[/<key>], #/control[/<key>] (Standard, auch nach dem Abmelden), #/explorer[/<key>] (Admin), #/users (Admin)
   shell.js     Seitenleiste, Farbschema, picker() = PDU-Auswahl mit Live-Leistung (/api/pdus/summary alle 10 s), every() = Polling (pausiert im Hintergrund)
   monitor.js   Kacheln, Phasen mit Auslastungsbalken, Leistungsverlauf (nur im Browser, HIST, max. 1 h), Sicherungen, Sensoren, Socket-Tabelle
   control.js   kompakte Socket-Kacheln (2 Zeilen, Name .75rem → 20 Zeichen passen, 7 Spalten bei 1920 px, `.cmain` max. 1720 px; Balkenfarbe = Gruppe; in-place aktualisiert), Ansicht **Einbau** (Standard)/Phase/Gruppe/Liste (`prefs.view`, localStorage `pdu.control2`), Filter + Suche (auch Gruppe), Auswahl + Auswahlleiste (An/Aus/Neustart/Gruppe …), Bearbeiten-Dialog (Name auf der PDU + Gruppe in der App, Doppelklick), Protokoll
@@ -76,6 +76,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.5.3: „Steuerung“ ist die Startseite (ohne bzw. mit unbekanntem Hash und nach dem Abmelden).
 - v0.5.2: Socket-Typ mit Buchsen-Icon (SVG, C13/C19/Schuko); in der Ansicht „Einbau“ steht der Typ direkt hinter der Nummer → C13/C19 bündig untereinander, auch wenn eine Gruppe angezeigt wird.
 - v0.5.1: Untertitel „Rittal · Redfish“ und Hilfezeile der Steuerung entfernt; PDU-Namen in PDU_LIST umbenennbar ohne Datenverlust (Übernahme über die Adresse).
 - v0.5.0: Ansicht „Einbau“ (Standard): je Phase eine Spalte, Sockets wie montiert (42 oben … 01 unten), Lücken zwischen den Socket-Blöcken, einzeilige Kacheln; Einbaulage je PDU umschaltbar und für alle gespeichert.
