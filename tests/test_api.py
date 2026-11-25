@@ -255,3 +255,11 @@ def test_partial_failures_keep_sockets(monkeypatch):
         assert len(c._snap["outlets"]) == 42  # guter Stand bleibt
     finally:
         m.stop()
+
+
+def test_orientation_setting(client):
+    assert client.get("/api/pdus/labor-1").get_json()["settings"]["orient"] == "desc"
+    assert client.put("/api/pdus/labor-1/settings", json={"orient": "asc"}).get_json()["settings"]["orient"] == "asc"
+    assert client.get("/api/pdus/labor-1").get_json()["settings"]["orient"] == "asc"
+    assert client.get("/api/pdus/prestaging-1").get_json()["settings"]["orient"] == "desc"
+    assert client.put("/api/pdus/labor-1/settings", json={"orient": "quer"}).status_code == 400

@@ -14,7 +14,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -81,6 +81,27 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
     app.clients = clients
     log_path = os.path.join(data_dir, "actions.jsonl")
     groups_path = os.path.join(data_dir, "groups.json")
+    settings_path = os.path.join(data_dir, "pdu-settings.json")
+
+    # ---------- Einstellungen je PDU (z. B. Einbaulage) ----------
+    def settings_load():
+        try:
+            with open(settings_path, "r", encoding="utf-8") as fh:
+                d = json.load(fh)
+            return d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def settings_set(key, patch):
+        with open(settings_path + ".lock", "a+") as lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
+            d = settings_load()
+            d.setdefault(key, {}).update(patch)
+            tmp = settings_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(d, fh, ensure_ascii=False, indent=1)
+            os.replace(tmp, settings_path)
+            fcntl.flock(lk, fcntl.LOCK_UN)
     cache_dir = os.path.join(data_dir, "cache")
     os.makedirs(cache_dir, exist_ok=True)
 
@@ -134,6 +155,7 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
         out["outlets"] = [{**o, "group": mine.get(o["id"], "")} for o in snap["outlets"]]
         out["groups"] = sorted({g for per in all_groups.values() for g in per.values()}, key=str.lower)
         out["groupColors"] = group_colors()
+        out["settings"] = {"orient": "desc", **settings_load().get(snap["key"], {})}  # desc = höchste Nummer oben
         out["age"] = round(max(0.0, time.time() - snap["ts"]), 1)
         return out
 
@@ -342,6 +364,21 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
         snap = c.snapshot(force=force)
         save_cache(c)
         return jsonify(decorate(snap))
+
+    @app.put("/api/pdus/<key>/settings")
+    def set_settings(key):
+        need_control()
+        client(key)
+        body = require_json() or {}
+        patch = {}
+        if "orient" in body:
+            if body["orient"] not in ("desc", "asc"):
+                abort(400, "Einbaulage muss desc (höchste Nummer oben) oder asc sein")
+            patch["orient"] = body["orient"]
+        if not patch:
+            abort(400, "Keine Einstellung angegeben")
+        settings_set(key, patch)
+        return jsonify(ok=True, settings={"orient": "desc", **settings_load().get(key, {})})
 
     @app.put("/api/pdus/<key>/groups")
     def set_groups(key):

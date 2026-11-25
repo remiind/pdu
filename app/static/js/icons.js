@@ -24,6 +24,7 @@ const P = {
   grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
   history: '<path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v3h3M12 8v4l3 2"/>',
   chev: '<path d="M9 6l6 6-6 6"/>',
+  swap: '<path d="M8 20V4M8 4L5 7M8 4l3 3M16 4v16M16 20l-3-3M16 20l3-3"/>',
   warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
   thermo: '<path d="M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0z"/><path d="M12 10v6"/>',
 };

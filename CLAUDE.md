@@ -20,7 +20,7 @@ app/static/js/
   app.js       Hash-Router: #/monitor[/<key>], #/control[/<key>], #/explorer[/<key>] (Admin), #/users (Admin)
   shell.js     Seitenleiste, Farbschema, picker() = PDU-Auswahl mit Live-Leistung (/api/pdus/summary alle 10 s), every() = Polling (pausiert im Hintergrund)
   monitor.js   Kacheln, Phasen mit Auslastungsbalken, Leistungsverlauf (nur im Browser, HIST, max. 1 h), Sicherungen, Sensoren, Socket-Tabelle
-  control.js   kompakte Socket-Kacheln (2 Zeilen, Name .75rem → 20 Zeichen passen, 7 Spalten bei 1920 px, `.cmain` max. 1720 px; Balkenfarbe = Gruppe; in-place aktualisiert), Ansicht Phase/Gruppe/Liste (`prefs.view`), Filter + Suche (auch Gruppe), Auswahl + Auswahlleiste (An/Aus/Neustart/Gruppe …), Bearbeiten-Dialog (Name auf der PDU + Gruppe in der App, Doppelklick), Protokoll
+  control.js   kompakte Socket-Kacheln (2 Zeilen, Name .75rem → 20 Zeichen passen, 7 Spalten bei 1920 px, `.cmain` max. 1720 px; Balkenfarbe = Gruppe; in-place aktualisiert), Ansicht **Einbau** (Standard)/Phase/Gruppe/Liste (`prefs.view`, localStorage `pdu.control2`), Filter + Suche (auch Gruppe), Auswahl + Auswahlleiste (An/Aus/Neustart/Gruppe …), Bearbeiten-Dialog (Name auf der PDU + Gruppe in der App, Doppelklick), Protokoll
   explorer.js  Redfish-Rohdaten als Baum, Links auf @odata.id
   users.js · login.js · ui.js · util.js · icons.js · theme.js · api.js · session.js
 tests/mock_redfish.py  make_pdu() = generische DMTF-PDU · make_rittal() = Nachbau der echten Rittal 7979340 inkl. /cgi-bin/json.cgi (Diagnose-Paket + rittal_probe 25.11.2026); CLI: `python tests/mock_redfish.py 9101 42 rittal`
@@ -40,6 +40,10 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - **Weboberfläche** (`app/rittalweb.py`): `POST /cgi-bin/json.cgi`, form-urlencoded, Rumpf `befehl={json}` unkodiert. Login `createSession={"username","password","force":0}` → `{"result":0}` + Cookie `sessionId` (Auto-Logout 1800 s → App meldet nach 1500 s neu an, bei `result≠0` einmal neu). `getDeviceInfos` (deviceIndex ↔ serialNumber; Gerät 2 = PDU-SWI mit Redfish-SN), `getDeviceDescriptions` (Variablen-Index = Position in `descriptions`, leere `{}` zählen mit). Socket-Name = `Sockets.Socket NN.General.DescName` (= Redfish `UserLabel`), Regeln `maxLen 20`, `^([-_ a-zA-Z0-9]{0,20})$`. Setzen (wie Browser: `looseFocus={"focus":1}` → `setValues` → `looseFocus={"focus":0}`, am 25.11. mit `rittal_probe --set` auf der echten PDU bestätigt): `setValues={"variables":[{"deviceIndex":2,"variableIndex":139,"value":"…"}]}` (Socket 02 → 139). Zuordnung 1 h gecacht.
 - Account braucht Redfish-Rechte (`apiuser` ohne Rechte → 401 auf Session und Basic).
 
+## Ansicht „Einbau“
+- Die 42er-PDUs hängen mit **Socket 42 oben, 01 unten** (oben L3 42–29, darunter Controller, L2 28–15, unten L1 14–01; je Phase 2× C19 + 12× C13 in Blöcken). Ansicht `rack` in control.js: je Phase eine Spalte (`.rackgrid`/`.rackcol`), Spalten und Sockets in Einbaureihenfolge – `orient` `desc` (höchste Nummer oben → Spalten L3|L2|L1, absteigend) oder `asc` (umgekehrt). Gestrichelte Lücke (`.rgap`), wo der Socket-Typ wechselt. Kacheln dort einzeilig (gleiche Elemente, nur CSS: `.rackcol .srow { display: contents }` + `order`).
+- Einbaulage gilt je PDU für alle Benutzer: `$PDU_DATA/pdu-settings.json` `{pdu-key: {orient}}`, `PUT /api/pdus/<key>/settings {orient: desc|asc}` (braucht `control`), Momentaufnahme liefert `settings` (Standard `desc`). Knopf „42 oben ⇅“ in der Werkzeugleiste (nur in „Einbau“).
+
 ## Gruppen & Tempo
 - **Gruppen** gehören der App (die PDU kennt nur numerische Gruppen 0–99): `$PDU_DATA/groups.json` `{pdu-key: {socket-id: name}, _colors: {name: hex}}`, max. 32 Zeichen. **Farben:** jede neue Gruppe bekommt die erste freie Farbe aus `GROUP_COLORS` (12, ohne Türkis/Rot/Grün), stabil; ungenutzte werden freigegeben. Kachel-Balken links = Gruppenfarbe (`--gc`), ohne Gruppe Türkis (`--accent`), ausgeschaltet blass. Frontend: `setGroupColors()`/`groupColor()` in util.js. `decorate()` legt `group` je Outlet und `groups` (alle Namen über alle PDUs, für Vorschläge) über die Momentaufnahme – nie in den Cache.
 - **Robustheit:** `collection()` lädt mit max. 4 parallelen Abrufen (PDU arbeitet nacheinander); fällt ein einzelnes Mitglied aus, wird sein letzter Rohstand (`_raw`) genommen, fehlen dann noch welche → Fehler. Ein Stand ohne Sockets ersetzt nie einen guten (Fehler, letzter Stand bleibt) – vorher führte ein einzelner Timeout zu „0 Sockets“ beim PDU-Wechsel. Phasen fehlen kurz → aus dem letzten Stand.
@@ -47,9 +51,10 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 
 ## API
 - `GET /api/pdus` → `{pdus:[{key,name,group,host,error}], control}` · `GET /api/pdus/summary` → je PDU `{ok,power,model,health|error}` (nutzt Momentaufnahme < 15 s, sonst nur PDU + Metrics)
-- `GET /api/pdus/<key>[?force=1]` → Momentaufnahme `{info, phases[], totals{power,energy,frequency,neutral,current}, env, branches[], outlets[], sensors[], counts, groups[], groupColors{}, age}`
+- `GET /api/pdus/<key>[?force=1]` → Momentaufnahme `{info, phases[], totals{power,energy,frequency,neutral,current}, env, branches[], outlets[], sensors[], counts, groups[], groupColors{}, settings{orient}, age}`
   - Outlet: `{id,num,name,label(UserLabel),group(App),type(C13/C19/…),state(PowerState),locked,phase(L1–L3 aus ElectricalContext oder Branch),branch,current,power,energy,voltage,rated,target,health,status}`
   - Phasen aus einem Mains-Kreis mit `PolyPhase*` **oder** aus je einem Mains-Kreis pro Phase.
+- `PUT /api/pdus/<key>/settings {orient}` → Einbaulage je PDU (`desc` = höchste Nummer oben, Standard; `asc`)
 - `PUT /api/pdus/<key>/groups {ids[],group}` → Gruppe setzen/entfernen (leer), Protokoll-Aktion `Group`
 - `POST /api/pdus/<key>/outlets/<id>/power {action:On|Off|PowerCycle}` · `POST /api/pdus/<key>/power {ids[],action}` (nacheinander) · `PUT /api/pdus/<key>/outlets/<id> {label}` → `{ok,label}` (Redfish `UserLabel`, bei Rittal über json.cgi; max. 64, Rittal 20 Zeichen)
 - `GET /api/admin/diag/<key>` = Diagnose-Paket (Rohdaten PDU, Mains, Branches, 3 Outlets, Sensoren, DataSourceUri-Verweise, $expand-Test, Zeiten; Knopf im Redfish-Explorer)
@@ -70,6 +75,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.5.0: Ansicht „Einbau“ (Standard): je Phase eine Spalte, Sockets wie montiert (42 oben … 01 unten), Lücken zwischen den Socket-Blöcken, einzeilige Kacheln; Einbaulage je PDU umschaltbar und für alle gespeichert.
 - v0.4.2: Kein „0 Sockets“ mehr nach PDU-Wechsel (einzelne Ausfälle abgefangen, halbe Stände verworfen, weniger parallele Abrufe); Gruppenfarben am Kachelrand (Standard Türkis, jede Gruppe eigene, stabile Farbe); kleinere Namen (20 Zeichen lesbar), breitere Steuerungsseite.
 - v0.4.1: Alle PDUs werden dauerhaft alle 10 s (angesehene alle 5 s) im Hintergrund gelesen; Seiten zeigen immer sofort den letzten Stand; Pause bei nicht erreichbaren PDUs; Mock mit realistischer Trägheit.
 - v0.4.0: Kompakte Kacheln (alle 42 Sockets auf einem Bildschirm), Socket-Gruppen (Dialog, Auswahl, Ansicht „Gruppe“, Suche, Monitoring-Spalte), Hintergrund-Aktualisierung + gespeicherter Stand → Steuerung/Monitoring erscheinen sofort.

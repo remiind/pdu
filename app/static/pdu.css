@@ -188,3 +188,19 @@ a.jl { text-decoration: underline; text-decoration-style: dotted; }
   .csearch input { width: 9rem; }
   .ctool { position: static; }
 }
+
+/* ---------- Steuerung: Ansicht „Einbau“ (je Phase eine Spalte, Reihenfolge wie montiert) ---------- */
+.rackgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: .9rem; align-items: start; }
+.rackcol { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); padding: .55rem .55rem .6rem; min-width: 0; }
+.rackcol .cghead { margin: 0 .2rem .45rem; flex-wrap: wrap; row-gap: 0; }
+.rackstack { display: flex; flex-direction: column; gap: .28rem; }
+.rgap { height: .45rem; border-bottom: 1px dashed var(--line); margin: 0 .3rem .35rem; }
+/* einzeilige Kachel: Auswahl · Nr · Name · Typ · Gruppe · Info · Aktionen · Schalter */
+.rackcol .sock { flex-direction: row; align-items: center; gap: .35rem; padding: .28rem .45rem .28rem .7rem; min-height: 34px; }
+.rackcol .srow { display: contents; }
+.rackcol .ssel { order: 1; } .rackcol .snum { order: 2; } .rackcol .slabel { order: 3; font-size: .8rem; }
+.rackcol .tchip { order: 4; } .rackcol .gchip { order: 5; font-size: .72rem; } .rackcol .sinfo { order: 6; font-size: .72rem; }
+.rackcol .slock { order: 7; } .rackcol .icb { order: 8; } .rackcol .switch { order: 9; margin-left: .15rem; }
+.rackcol .s2 .grow, .rackcol .sph { display: none; }
+.rackcol .s2 .icb { padding: .1rem; min-width: 22px; }
+.rackcol .tchip { font-size: .66rem; padding: 0 .3rem; }

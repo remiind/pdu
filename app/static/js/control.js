@@ -7,14 +7,14 @@ import { I, choosePdu, every, page, picker } from './shell.js';
 import { ico } from './icons.js';
 
 const ACT_NAMES = { On: 'Einschalten', Off: 'Ausschalten', PowerCycle: 'Neu starten', Label: 'Umbenannt', Group: 'Gruppe' };
-const PREF = 'pdu.control';
+const PREF = 'pdu.control2'; // neuer Schlüssel: Standardansicht ist jetzt „Einbau“
 const NAME_RE = /^[-_ a-zA-Z0-9]*$/; // Regeln der Rittal-PDU (DescName)
-const VIEWS = [['phase', 'Phase'], ['group', 'Gruppe'], ['none', 'Liste']];
+const VIEWS = [['rack', 'Einbau'], ['phase', 'Phase'], ['group', 'Gruppe'], ['none', 'Liste']];
 
 function loadPrefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREF) || '{}'); } catch { /* ignore */ }
-  if (!VIEWS.some(([k]) => k === p.view)) p.view = p.group === false ? 'none' : 'phase';
+  if (!VIEWS.some(([k]) => k === p.view)) p.view = 'rack';
   return p;
 }
 const savePrefs = (p) => { try { localStorage.setItem(PREF, JSON.stringify({ view: p.view })); } catch { /* ignore */ } };
@@ -56,10 +56,11 @@ export async function renderControl(root, routeKey) {
   const phaseChips = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filter Phase' });
   const viewChips = h('div', { class: 'seg', role: 'group', 'aria-label': 'Ansicht' });
   const stats = h('span', { class: 'cstat num' });
+  const orientBtn = h('button', { type: 'button', class: 'btn sm', title: 'Einbaulage der PDU: welche Socket-Nummer oben ist (gilt für alle Benutzer)', onclick: () => toggleOrient() });
   const selAllBtn = h('button', { type: 'button', class: 'btn sm', onclick: () => { const vis = visible(); const all = vis.every((o) => st.sel.has(o.id)); vis.forEach((o) => (all ? st.sel.delete(o.id) : st.sel.add(o.id))); refresh(); } }, I('check'), 'Alle sichtbaren');
   const toolbar = h('div', { class: 'card ctool' },
     h('div', { class: 'ctool-row' }, h('label', { class: 'csearch' }, I('search'), search), showChips, phaseChips,
-      h('span', { class: 'clabel' }, 'Ansicht'), viewChips, h('span', { class: 'grow' }), stats, canControl && selAllBtn));
+      h('span', { class: 'clabel' }, 'Ansicht'), viewChips, orientBtn, h('span', { class: 'grow' }), stats, canControl && selAllBtn));
 
   const selCount = h('b', { class: 'num' });
   const selBar = h('div', { class: 'selbar', hidden: true, role: 'region', 'aria-label': 'Auswahl' },
@@ -98,7 +99,13 @@ export async function renderControl(root, routeKey) {
     const phases = [...new Set(snap.outlets.map((o) => o.phase).filter(Boolean))].sort();
     phaseChips.hidden = phases.length < 2;
     phaseChips.replaceChildren(...[['', 'Alle Phasen'], ...phases.map((p) => [p, p])].map(([k, l]) => segBtn(st.phase === k, l, () => { st.phase = k; layout(); })));
-    viewChips.replaceChildren(...VIEWS.filter(([k]) => k !== 'phase' || phases.length > 1).map(([k, l]) => segBtn(prefs.view === k, l, () => { prefs.view = k; savePrefs(prefs); layout(); })));
+    const orient = snap.settings?.orient || 'desc';
+    const nums = snap.outlets.map((o) => o.num).filter((x) => x !== null && x !== undefined);
+    const hi = nums.length ? Math.max(...nums) : 0, lo = nums.length ? Math.min(...nums) : 0;
+    orientBtn.replaceChildren(I('swap'), `${String(orient === 'desc' ? hi : lo).padStart(2, '0')} oben`);
+    orientBtn.hidden = prefs.view !== 'rack';
+    orientBtn.disabled = !canControl;
+    viewChips.replaceChildren(...VIEWS.filter(([k]) => !['phase', 'rack'].includes(k) || phases.length > 1 || k === 'rack').map(([k, l]) => segBtn(prefs.view === k, l, () => { prefs.view = k; savePrefs(prefs); layout(); })));
     stats.textContent = `${n.on} an · ${n.off} aus · ${watts(snap.totals.power)}`;
   }
 
@@ -137,7 +144,7 @@ export async function renderControl(root, routeKey) {
       type.textContent = o.type || '';
       type.hidden = !o.type;
       ph.textContent = o.phase || '';
-      ph.hidden = !o.phase || prefs.view === 'phase';
+      ph.hidden = !o.phase || prefs.view === 'phase' || prefs.view === 'rack';
       grp.textContent = o.group || '';
       grp.hidden = !o.group || prefs.view === 'group';
       const gc = groupColor(o.group);
@@ -171,6 +178,16 @@ export async function renderControl(root, routeKey) {
   /** Abschnitte je Ansicht: [{kind, g, title, items}] */
   function sections(vis) {
     const view = prefs.view === 'phase' && st.phase ? 'none' : prefs.view;
+    if (view === 'rack') {
+      // wie montiert: je Phase eine Spalte, Spalten und Sockets in Einbaureihenfolge (desc = höchste Nummer oben)
+      const desc = (snap.settings?.orient || 'desc') === 'desc';
+      const by = (a, b) => (desc ? b.num - a.num : a.num - b.num);
+      const groups = [...new Set(snap.outlets.map((o) => o.phase || '–'))].map((g) => {
+        const all = snap.outlets.filter((o) => (o.phase || '–') === g).sort(by);
+        return { kind: 'rack', g, title: g === '–' ? 'Ohne Phase' : `Phase ${g}`, range: all.length ? `${pad(all[0])}–${pad(all[all.length - 1])}` : '', key: all.length ? all[0].num : 0, items: vis.filter((o) => (o.phase || '–') === g).sort(by) };
+      });
+      return groups.sort((a, b) => (desc ? b.key - a.key : a.key - b.key));
+    }
     if (view === 'phase' && vis.some((o) => o.phase)) {
       return [...new Set(vis.map((o) => o.phase || '–'))].sort().map((g) => ({ kind: 'phase', g, title: g === '–' ? 'Ohne Phase' : `Phase ${g}`, items: vis.filter((o) => (o.phase || '–') === g) }));
     }
@@ -183,7 +200,7 @@ export async function renderControl(root, routeKey) {
     }
     return [{ kind: 'none', g: null, title: null, items: vis }];
   }
-  const layoutKey = (secs) => `${prefs.view}|${secs.map((s) => `${s.g}:${s.items.map((o) => o.id).join(',')}`).join('|')}`;
+  const layoutKey = (secs) => `${prefs.view}|${snap?.settings?.orient}|${secs.map((s) => `${s.g}:${s.items.map((o) => o.id).join(',')}`).join('|')}`;
 
   function layout() {
     if (!snap) return;
@@ -194,6 +211,23 @@ export async function renderControl(root, routeKey) {
     heads = [];
     for (const o of snap.outlets) if (!tiles.has(o.id)) tiles.set(o.id, makeTile(o));
     if (!vis.length) { grid.replaceChildren(h('div', { class: 'card empty-card' }, h('p', { class: 'muted' }, 'Kein Socket passt zum Filter.'))); refresh(); return; }
+    if (secs[0]?.kind === 'rack') {
+      grid.replaceChildren(h('div', { class: 'rackgrid' }, secs.map((s) => {
+        const info = h('span', { class: 'muted small num' });
+        heads.push({ ...s, kind: 'phase', el: info });
+        const stack = h('div', { class: 'rackstack' });
+        let prevType = null;
+        for (const o of s.items) { // kleine Lücke, wo der Socket-Typ wechselt (Blöcke wie auf der Leiste)
+          if (prevType !== null && o.type !== prevType) stack.append(h('div', { class: 'rgap', 'aria-hidden': 'true' }));
+          prevType = o.type;
+          stack.append(tiles.get(o.id).el);
+        }
+        if (!s.items.length) stack.append(h('p', { class: 'muted small' }, 'Kein Socket passt zum Filter.'));
+        return h('section', { class: 'rackcol' }, h('div', { class: 'cghead' }, h('b', null, s.title), h('span', { class: 'muted small num' }, s.range), info), stack);
+      })));
+      refresh();
+      return;
+    }
     grid.replaceChildren(...secs.map((s) => {
       const info = h('span', { class: 'muted small num' });
       if (s.title) heads.push({ ...s, el: info });
@@ -290,6 +324,17 @@ export async function renderControl(root, routeKey) {
       toast(`Socket ${pad(o)} gespeichert.`);
     } catch (e) { toast(e.message, 'err'); }
     layout(); loop.now(true); loadLog();
+  }
+
+  async function toggleOrient() {
+    if (!canControl || !snap) return;
+    const next = (snap.settings?.orient || 'desc') === 'desc' ? 'asc' : 'desc';
+    try {
+      const r = await api.settings(key, { orient: next });
+      snap.settings = r.settings;
+      layout();
+      toast(next === 'desc' ? 'Einbaulage: höchste Socket-Nummer oben.' : 'Einbaulage: Socket 01 oben.');
+    } catch (e) { toast(e.message, 'err'); }
   }
 
   /** Gruppe für mehrere Sockets setzen (Auswahlleiste). */
