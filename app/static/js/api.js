@@ -26,6 +26,7 @@ export const api = {
   power: (key, id, action) => call('POST', `/api/pdus/${enc(key)}/outlets/${enc(id)}/power`, { action }),
   bulk: (key, ids, action) => call('POST', `/api/pdus/${enc(key)}/power`, { ids, action }),
   label: (key, id, label) => call('PUT', `/api/pdus/${enc(key)}/outlets/${enc(id)}`, { label }),
+  group: (key, ids, group) => call('PUT', `/api/pdus/${enc(key)}/groups`, { ids, group }),
   log: (key) => call('GET', `/api/log?pdu=${enc(key)}`),
   raw: (key, path) => call('GET', `/api/admin/redfish/${enc(key)}?path=${enc(path)}`),
   // Anmeldung

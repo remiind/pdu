@@ -121,7 +121,7 @@ export async function renderMonitor(root, routeKey) {
 
   function sockets() {
     const q = state.q.toLowerCase();
-    const rows = snap.outlets.filter((o) => !q || `${o.num} ${o.label} ${o.name} ${o.type} ${o.phase}`.toLowerCase().includes(q));
+    const rows = snap.outlets.filter((o) => !q || `${o.num} ${o.label} ${o.name} ${o.group || ''} ${o.type} ${o.phase}`.toLowerCase().includes(q));
     const k = state.sort;
     rows.sort((a, b) => {
       const va = a[k] ?? (typeof b[k] === 'string' ? '' : -1), vb = b[k] ?? (typeof a[k] === 'string' ? '' : -1);
@@ -129,10 +129,11 @@ export async function renderMonitor(root, routeKey) {
     });
     const maxP = Math.max(1, ...snap.outlets.map((o) => o.power || 0));
     const m = snap.metering !== false; // PDU misst je Socket (sonst Spalten ausblenden)
+    const hasGroups = snap.outlets.some((o) => o.group);
     const th = (k2, label, cls = '') => h('th', { class: cls + ' sortable' + (state.sort === k2 ? ' on' : ''), onclick: () => { state.dir = state.sort === k2 ? -state.dir : (['power', 'current', 'energy'].includes(k2) ? -1 : 1); state.sort = k2; draw(); } },
       label, state.sort === k2 ? (state.dir > 0 ? ' ↑' : ' ↓') : '');
     return h('table', { class: 'data stable' },
-      h('thead', null, h('tr', null, th('num', 'Nr'), th('label', 'Beschreibung'), th('type', 'Typ'), th('phase', 'Phase'), th('state', 'Status'),
+      h('thead', null, h('tr', null, th('num', 'Nr'), th('label', 'Name'), hasGroups && th('group', 'Gruppe'), th('type', 'Typ'), th('phase', 'Phase'), th('state', 'Status'),
         m && th('current', 'Strom', 'r'), m && th('power', 'Leistung', 'r'), m && th('energy', 'Energie', 'r'))),
       h('tbody', null, rows.length ? rows.map((o) => {
         const bar = h('span', { class: 'ibar' });
@@ -140,17 +141,18 @@ export async function renderMonitor(root, routeKey) {
         return h('tr', { class: o.state === 'Off' ? 'dim' : '' },
           h('td', { class: 'num mono' }, String(o.num ?? o.id).padStart(2, '0')),
           h('td', null, o.label || h('span', { class: 'muted' }, o.name || '–')),
+          hasGroups && h('td', null, o.group ? h('span', { class: 'gchip' }, o.group) : ''),
           h('td', null, o.type ? h('span', { class: 'tchip' }, o.type) : '–'),
           h('td', { class: 'muted' }, o.phase || '–'),
           h('td', null, stateBadge(o.state)),
           m && h('td', { class: 'r num' }, o.current === null ? '–' : `${fmt(o.current, 2)} A`),
           m && h('td', { class: 'r num pcell' }, h('span', { class: 'itrack' }, bar), o.power === null ? '–' : watts(o.power)),
           m && h('td', { class: 'r num muted' }, o.energy === null ? '–' : `${fmt(o.energy, 1)} kWh`));
-      }) : h('tr', null, h('td', { colspan: m ? 8 : 5, class: 'empty' }, 'Kein Socket passt zur Suche.'))));
+      }) : h('tr', null, h('td', { colspan: (m ? 8 : 5) + (hasGroups ? 1 : 0), class: 'empty' }, 'Kein Socket passt zur Suche.'))));
   }
 
   const sockWrap = h('div', { class: 'scroll' });
-  const search = h('input', { type: 'search', placeholder: 'Socket suchen …', 'aria-label': 'Sockets durchsuchen', oninput: () => { state.q = search.value; sockWrap.replaceChildren(sockets()); } });
+  const search = h('input', { type: 'search', placeholder: 'Socket oder Gruppe suchen …', 'aria-label': 'Sockets durchsuchen', oninput: () => { state.q = search.value; sockWrap.replaceChildren(sockets()); } });
 
   function draw() {
     const s = snap, t = s.totals, i = s.info;

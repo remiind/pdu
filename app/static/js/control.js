@@ -1,21 +1,33 @@
-// Steuerung: Sockets einer PDU schalten (einzeln oder als Auswahl), beschriften, Verlauf
+// Steuerung: Sockets einer PDU schalten (einzeln oder als Auswahl), benennen, gruppieren, Verlauf
 import { ago, fmt, h, time, watts } from './util.js';
 import { api } from './api.js';
 import { session } from './session.js';
-import { confirmBox, promptBox, toast } from './ui.js';
+import { confirmBox, modal, toast } from './ui.js';
 import { I, choosePdu, every, page, picker } from './shell.js';
 import { ico } from './icons.js';
 
-const ACT_NAMES = { On: 'Einschalten', Off: 'Ausschalten', PowerCycle: 'Neu starten', Label: 'Beschriftet' };
+const ACT_NAMES = { On: 'Einschalten', Off: 'Ausschalten', PowerCycle: 'Neu starten', Label: 'Umbenannt', Group: 'Gruppe' };
 const PREF = 'pdu.control';
+const NAME_RE = /^[-_ a-zA-Z0-9]*$/; // Regeln der Rittal-PDU (DescName)
+const VIEWS = [['phase', 'Phase'], ['group', 'Gruppe'], ['none', 'Liste']];
 
 function loadPrefs() {
-  try { return { group: true, ...JSON.parse(localStorage.getItem(PREF) || '{}') }; } catch { return { group: true }; }
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem(PREF) || '{}'); } catch { /* ignore */ }
+  if (!VIEWS.some(([k]) => k === p.view)) p.view = p.group === false ? 'none' : 'phase';
+  return p;
 }
-const savePrefs = (p) => { try { localStorage.setItem(PREF, JSON.stringify({ group: p.group })); } catch { /* ignore */ } };
+const savePrefs = (p) => { try { localStorage.setItem(PREF, JSON.stringify({ view: p.view })); } catch { /* ignore */ } };
 
 const pad = (o) => String(o.num ?? o.id).padStart(2, '0');
 const title = (o) => o.label || o.name || `Socket ${pad(o)}`;
+
+/** Eingabefeld mit Vorschlagsliste vorhandener Gruppen. */
+function groupInput(value, groups) {
+  const id = 'grp-' + Math.random().toString(36).slice(2, 8);
+  const input = h('input', { value: value || '', list: id, maxlength: '32', autocomplete: 'off', 'aria-label': 'Gruppe' });
+  return { input, list: h('datalist', { id }, groups.map((g) => h('option', { value: g }))) };
+}
 
 export async function renderControl(root, routeKey) {
   const main = page(root, 'control');
@@ -34,19 +46,20 @@ export async function renderControl(root, routeKey) {
   const st = { q: '', show: 'all', phase: '', sel: new Set(), last: null, pending: new Set() };
   let snap = null;
   const tiles = new Map(); // Socket-ID → { el, update }
-  let heads = []; // Gruppenköpfe { g, el } – Zahlen werden bei jeder Aktualisierung neu gesetzt
-  let laidOut = ''; // sichtbare IDs beim letzten Aufbau
+  let heads = []; // Abschnittsköpfe { kind, g, items, el }
+  let laidOut = ''; // Aufbau-Schlüssel (Ansicht + Abschnitte + sichtbare IDs)
 
   // ---------- Kopf / Werkzeugleiste ----------
   const stamp = h('span', { class: 'muted small num' });
-  const search = h('input', { type: 'search', placeholder: 'Nr., Beschreibung, Typ …', 'aria-label': 'Sockets durchsuchen', oninput: () => { st.q = search.value.trim().toLowerCase(); layout(); } });
+  const search = h('input', { type: 'search', placeholder: 'Nr., Name, Gruppe, Typ …', 'aria-label': 'Sockets durchsuchen', oninput: () => { st.q = search.value.trim().toLowerCase(); layout(); } });
   const showChips = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filter Zustand' });
   const phaseChips = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filter Phase' });
-  const groupBox = h('input', { type: 'checkbox', checked: prefs.group, onchange: () => { prefs.group = groupBox.checked; savePrefs(prefs); layout(); } });
-  const selAllBtn = h('button', { type: 'button', class: 'btn', onclick: () => { const vis = visible(); const all = vis.every((o) => st.sel.has(o.id)); vis.forEach((o) => (all ? st.sel.delete(o.id) : st.sel.add(o.id))); refresh(); } }, I('check'), 'Alle sichtbaren');
+  const viewChips = h('div', { class: 'seg', role: 'group', 'aria-label': 'Ansicht' });
+  const stats = h('span', { class: 'cstat num' });
+  const selAllBtn = h('button', { type: 'button', class: 'btn sm', onclick: () => { const vis = visible(); const all = vis.every((o) => st.sel.has(o.id)); vis.forEach((o) => (all ? st.sel.delete(o.id) : st.sel.add(o.id))); refresh(); } }, I('check'), 'Alle sichtbaren');
   const toolbar = h('div', { class: 'card ctool' },
     h('div', { class: 'ctool-row' }, h('label', { class: 'csearch' }, I('search'), search), showChips, phaseChips,
-      h('label', { class: 'check' }, groupBox, h('span', null, 'Nach Phase gruppieren')), h('span', { class: 'grow' }), canControl && selAllBtn));
+      h('span', { class: 'clabel' }, 'Ansicht'), viewChips, h('span', { class: 'grow' }), stats, canControl && selAllBtn));
 
   const selCount = h('b', { class: 'num' });
   const selBar = h('div', { class: 'selbar', hidden: true, role: 'region', 'aria-label': 'Auswahl' },
@@ -54,19 +67,19 @@ export async function renderControl(root, routeKey) {
     h('button', { type: 'button', class: 'btn primary', onclick: () => act([...st.sel], 'On', true) }, I('power'), 'Einschalten'),
     h('button', { type: 'button', class: 'btn danger', onclick: () => act([...st.sel], 'Off', true) }, I('power'), 'Ausschalten'),
     h('button', { type: 'button', class: 'btn', onclick: () => act([...st.sel], 'PowerCycle', true) }, I('cycle'), 'Neu starten'),
-    h('button', { type: 'button', class: 'icb', title: 'Auswahl aufheben', 'aria-label': 'Auswahl aufheben', html: ico('x'), onclick: () => { st.sel.clear(); refresh(); } }));
+    h('button', { type: 'button', class: 'btn', onclick: () => groupDialog([...st.sel]) }, I('grid'), 'Gruppe …'),
+    h('button', { type: 'button', class: 'icb', title: 'Auswahl aufheben (Esc)', 'aria-label': 'Auswahl aufheben', html: ico('x'), onclick: () => { st.sel.clear(); refresh(); } }));
 
   const grid = h('div', { class: 'cgrid' }, h('p', { class: 'muted' }, 'Lade Sockets …'));
-  const head = h('div', { class: 'cinfo' });
   const logBody = h('div', { class: 'scroll' });
   main.classList.add('cmain');
   main.replaceChildren(...[
-    h('header', { class: 'page phead' }, h('div', null, h('h1', null, 'Steuerung'), h('p', { class: 'sub' }, 'Sockets per Klick schalten · Mehrfachauswahl mit Klick auf die Kachel (Umschalt = Bereich)')),
+    h('header', { class: 'page phead' }, h('div', null, h('h1', null, 'Steuerung'), h('p', { class: 'sub' }, 'Schalter = sofort schalten · Klick auf die Kachel = auswählen (Umschalt = Bereich) · Doppelklick = bearbeiten')),
       h('div', { class: 'phead-r' }, stamp, h('button', { type: 'button', class: 'btn', onclick: () => loop.now(true) }, I('refresh'), 'Aktualisieren'))),
     pick.el,
     !canControl && h('div', { class: 'flash warn' }, 'Dein Konto darf die Sockets nur ansehen, nicht schalten.'),
-    head, toolbar, grid,
-    h('div', { class: 'card flush logcard' }, h('div', { class: 'cardhead' }, h('h2', null, 'Letzte Schaltvorgänge'), I('history')), logBody),
+    toolbar, grid,
+    h('div', { class: 'card flush logcard' }, h('div', { class: 'cardhead' }, h('h2', null, 'Letzte Vorgänge'), I('history')), logBody),
     selBar].filter(Boolean));
 
   // ---------- Filter ----------
@@ -74,67 +87,65 @@ export async function renderControl(root, routeKey) {
     if (!snap) return [];
     return snap.outlets.filter((o) => (st.show === 'all' || (st.show === 'on' ? o.state === 'On' : o.state !== 'On'))
       && (!st.phase || o.phase === st.phase)
-      && (!st.q || `${pad(o)} ${o.num} ${o.label} ${o.name} ${o.type || ''} ${o.phase || ''}`.toLowerCase().includes(st.q)));
+      && (!st.q || `${pad(o)} ${o.num} ${o.label} ${o.name} ${o.group || ''} ${o.type || ''} ${o.phase || ''}`.toLowerCase().includes(st.q)));
   }
 
+  const segBtn = (on, label, fn, extra) => h('button', { type: 'button', class: on ? 'on' : '', 'aria-pressed': on ? 'true' : 'false', onclick: fn }, label, extra);
   function chips() {
     const n = { all: snap.outlets.length, on: snap.outlets.filter((o) => o.state === 'On').length };
     n.off = n.all - n.on;
-    showChips.replaceChildren(...[['all', 'Alle'], ['on', 'An'], ['off', 'Aus']].map(([k, l]) => h('button', {
-      type: 'button', class: st.show === k ? 'on' : '', 'aria-pressed': st.show === k ? 'true' : 'false', onclick: () => { st.show = k; layout(); },
-    }, l, h('span', { class: 'n' }, String(n[k])))));
+    showChips.replaceChildren(...[['all', 'Alle'], ['on', 'An'], ['off', 'Aus']].map(([k, l]) => segBtn(st.show === k, l, () => { st.show = k; layout(); }, h('span', { class: 'n' }, String(n[k])))));
     const phases = [...new Set(snap.outlets.map((o) => o.phase).filter(Boolean))].sort();
     phaseChips.hidden = phases.length < 2;
-    groupBox.parentElement.hidden = phases.length < 2;
-    phaseChips.replaceChildren(...[['', 'Alle Phasen'], ...phases.map((p) => [p, p])].map(([k, l]) => h('button', {
-      type: 'button', class: st.phase === k ? 'on' : '', 'aria-pressed': st.phase === k ? 'true' : 'false', onclick: () => { st.phase = k; layout(); },
-    }, l)));
+    phaseChips.replaceChildren(...[['', 'Alle Phasen'], ...phases.map((p) => [p, p])].map(([k, l]) => segBtn(st.phase === k, l, () => { st.phase = k; layout(); })));
+    viewChips.replaceChildren(...VIEWS.filter(([k]) => k !== 'phase' || phases.length > 1).map(([k, l]) => segBtn(prefs.view === k, l, () => { prefs.view = k; savePrefs(prefs); layout(); })));
+    stats.textContent = `${n.on} an · ${n.off} aus · ${watts(snap.totals.power)}`;
   }
 
-  // ---------- Kacheln ----------
+  // ---------- Kacheln (kompakt: 2 Zeilen) ----------
   function makeTile(o0) {
     let o = o0;
     const num = h('span', { class: 'snum num' });
+    const label = h('span', { class: 'slabel' });
     const type = h('span', { class: 'tchip' });
+    const grp = h('span', { class: 'gchip' });
     const ph = h('span', { class: 'sph' });
-    const label = h('div', { class: 'slabel' });
-    const stText = h('span', { class: 'sstate' }, h('i'), h('span'));
-    const pw = h('span', { class: 'spow num' });
-    const sw = h('button', { type: 'button', class: 'switch', role: 'switch', disabled: !canControl, onclick: (e) => { e.stopPropagation(); act([o.id], o.state === 'On' ? 'Off' : 'On'); } }, h('span', { class: 'knob' }));
+    const info = h('span', { class: 'sinfo num' });
+    const sw = h('button', { type: 'button', class: 'switch sm', role: 'switch', disabled: !canControl, onclick: (e) => { e.stopPropagation(); act([o.id], o.state === 'On' ? 'Off' : 'On'); } }, h('span', { class: 'knob' }));
     const lock = h('span', { class: 'slock', title: 'Schalten an der PDU gesperrt', html: ico('lock'), hidden: true });
     const mk = (icon, tip, fn) => h('button', { type: 'button', class: 'icb', title: tip, 'aria-label': tip, html: ico(icon), disabled: !canControl, onclick: (e) => { e.stopPropagation(); fn(); } });
-    const btnEdit = mk('pencil', 'Beschreibung ändern', () => rename(o));
+    const btnEdit = mk('pencil', 'Name und Gruppe bearbeiten', () => editDialog(o));
     const btnCycle = mk('cycle', 'Neu starten (aus und wieder an)', () => act([o.id], 'PowerCycle'));
     const selDot = h('span', { class: 'ssel', 'aria-hidden': 'true', html: ico('check') });
     const el = h('div', {
       class: 'sock', tabindex: canControl ? '0' : '-1',
       onclick: (e) => { if (canControl) toggleSel(o, e.shiftKey); },
+      ondblclick: (e) => { if (canControl) { e.preventDefault(); editDialog(o); } },
       onkeydown: (e) => { if (canControl && (e.key === ' ' || e.key === 'Enter') && e.target === el) { e.preventDefault(); toggleSel(o, e.shiftKey); } },
     },
-    h('div', { class: 'srow' }, selDot, num, type, ph, h('span', { class: 'grow' }), lock, btnEdit, btnCycle),
-    label,
-    h('div', { class: 'srow sbot' }, stText, pw, h('span', { class: 'grow' }), sw));
+    h('div', { class: 'srow' }, selDot, num, label, sw),
+    h('div', { class: 'srow s2' }, type, ph, grp, info, h('span', { class: 'grow' }), lock, btnEdit, btnCycle));
     const update = (n) => {
       o = n;
       const on = o.state === 'On';
       const pending = st.pending.has(o.id);
       el.className = 'sock ' + (on ? 'on' : o.state === 'Off' ? 'off' : 'unk') + (st.sel.has(o.id) ? ' sel' : '') + (pending ? ' pending' : '') + (o.locked ? ' locked' : '');
-      el.setAttribute('aria-label', `Socket ${pad(o)} ${title(o)}, ${on ? 'an' : 'aus'}${st.sel.has(o.id) ? ', ausgewählt' : ''}`);
+      el.setAttribute('aria-label', `Socket ${pad(o)} ${title(o)}${o.group ? `, Gruppe ${o.group}` : ''}, ${on ? 'an' : 'aus'}${st.sel.has(o.id) ? ', ausgewählt' : ''}`);
       num.textContent = pad(o);
+      label.textContent = title(o);
+      label.title = [title(o), o.group && `Gruppe: ${o.group}`, o.name].filter(Boolean).join(' · ');
       type.textContent = o.type || '';
       type.hidden = !o.type;
       ph.textContent = o.phase || '';
-      ph.hidden = !o.phase;
-      label.replaceChildren(o.label ? o.label : h('span', { class: 'muted' }, o.name || `Socket ${pad(o)}`));
-      label.title = [o.label, o.name || o.id].filter(Boolean).join(' · ');
-      stText.className = 'sstate ' + (on ? 'on' : o.state === 'Off' ? 'off' : '');
-      stText.lastChild.textContent = pending ? 'schaltet …' : on ? 'An' : o.state === 'Off' ? 'Aus' : (o.state || '–');
-      pw.textContent = on && o.power !== null ? `${watts(o.power)}${o.current !== null ? ` · ${fmt(o.current, 2)} A` : ''}` : '';
+      ph.hidden = !o.phase || prefs.view === 'phase';
+      grp.textContent = o.group || '';
+      grp.hidden = !o.group || prefs.view === 'group';
+      info.textContent = pending ? 'schaltet …' : on && o.power !== null ? `${watts(o.power)}` : o.state && o.state !== 'On' && o.state !== 'Off' ? o.state : '';
       sw.setAttribute('aria-checked', on ? 'true' : 'false');
       sw.setAttribute('aria-label', `Socket ${pad(o)} ${on ? 'ausschalten' : 'einschalten'}`);
-      sw.title = on ? 'Ausschalten' : 'Einschalten';
+      sw.title = on ? 'An – klicken zum Ausschalten' : 'Aus – klicken zum Einschalten';
       sw.disabled = !canControl || pending || o.locked;
-      btnCycle.disabled = !canControl || pending || o.locked;
+      btnCycle.disabled = !canControl || pending || o.locked || !on;
       lock.hidden = !o.locked;
     };
     update(o);
@@ -155,22 +166,40 @@ export async function renderControl(root, routeKey) {
     refresh();
   }
 
+  /** Abschnitte je Ansicht: [{kind, g, title, items}] */
+  function sections(vis) {
+    const view = prefs.view === 'phase' && st.phase ? 'none' : prefs.view;
+    if (view === 'phase' && vis.some((o) => o.phase)) {
+      return [...new Set(vis.map((o) => o.phase || '–'))].sort().map((g) => ({ kind: 'phase', g, title: g === '–' ? 'Ohne Phase' : `Phase ${g}`, items: vis.filter((o) => (o.phase || '–') === g) }));
+    }
+    if (view === 'group') {
+      const names = [...new Set(vis.map((o) => o.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'de', { numeric: true }));
+      const out = names.map((g) => ({ kind: 'group', g, title: g, items: vis.filter((o) => o.group === g) }));
+      const rest = vis.filter((o) => !o.group);
+      if (rest.length) out.push({ kind: 'group', g: '', title: names.length ? 'Ohne Gruppe' : 'Noch keine Gruppen – Sockets auswählen und „Gruppe …“ wählen', items: rest });
+      return out;
+    }
+    return [{ kind: 'none', g: null, title: null, items: vis }];
+  }
+  const layoutKey = (secs) => `${prefs.view}|${secs.map((s) => `${s.g}:${s.items.map((o) => o.id).join(',')}`).join('|')}`;
+
   function layout() {
     if (!snap) return;
     chips();
     const vis = visible();
-    laidOut = vis.map((o) => o.id).join(',');
+    const secs = sections(vis);
+    laidOut = layoutKey(secs);
     heads = [];
     for (const o of snap.outlets) if (!tiles.has(o.id)) tiles.set(o.id, makeTile(o));
     if (!vis.length) { grid.replaceChildren(h('div', { class: 'card empty-card' }, h('p', { class: 'muted' }, 'Kein Socket passt zum Filter.'))); refresh(); return; }
-    const groups = prefs.group && !st.phase && snap.outlets.some((o) => o.phase) ? [...new Set(vis.map((o) => o.phase || '–'))].sort() : [null];
-    grid.replaceChildren(...groups.map((g) => {
-      const items = g === null ? vis : vis.filter((o) => (o.phase || '–') === g);
+    grid.replaceChildren(...secs.map((s) => {
       const info = h('span', { class: 'muted small num' });
-      if (g !== null) heads.push({ g, el: info });
+      if (s.title) heads.push({ ...s, el: info });
+      const pickAll = s.kind === 'group' && s.g && canControl
+        ? h('button', { type: 'button', class: 'linkbtn', onclick: () => { s.items.forEach((o) => st.sel.add(o.id)); refresh(); } }, 'Gruppe auswählen') : null;
       return h('section', { class: 'cgroup' },
-        g !== null && h('div', { class: 'cghead' }, h('b', null, g === '–' ? 'Ohne Phase' : `Phase ${g}`), info),
-        h('div', { class: 'socks' }, items.map((o) => tiles.get(o.id).el)));
+        s.title && h('div', { class: 'cghead' }, h('b', null, s.title), info, pickAll),
+        h('div', { class: 'socks' }, s.items.map((o) => tiles.get(o.id).el)));
     }));
     refresh();
   }
@@ -181,25 +210,14 @@ export async function renderControl(root, routeKey) {
     for (const id of [...st.sel]) if (!snap.outlets.some((o) => o.id === id)) st.sel.delete(id);
     selBar.hidden = !st.sel.size;
     selCount.textContent = String(st.sel.size);
-    const vis = visible();
-    for (const { g, el } of heads) {
-      const items = vis.filter((o) => (o.phase || '–') === g);
-      const sum = items.reduce((a, o) => a + (o.state === 'On' && o.power ? o.power : 0), 0);
-      const ph = snap.phases.find((p) => p.name === g);
-      el.textContent = `${items.length} Sockets · ${items.filter((o) => o.state === 'On').length} an · ${watts(ph?.power ?? sum)}${ph && ph.current !== null ? ` · ${fmt(ph.current, 2)} A` : ''}`;
+    for (const s of heads) {
+      const items = s.items.map((o) => snap.outlets.find((x) => x.id === o.id) || o);
+      const onN = items.filter((o) => o.state === 'On').length;
+      const ph = s.kind === 'phase' ? snap.phases.find((p) => p.name === s.g) : null;
+      s.el.textContent = `${items.length} Sockets · ${onN} an` + (ph ? ` · ${watts(ph.power)}${ph.current !== null ? ` · ${fmt(ph.current, 2)} A` : ''}` : '');
     }
+    const vis = visible();
     selAllBtn.replaceChildren(I('check'), vis.length && vis.every((o) => st.sel.has(o.id)) ? 'Auswahl aufheben' : 'Alle sichtbaren');
-  }
-
-  function drawHead() {
-    const i = snap.info;
-    head.replaceChildren(h('div', { class: 'card unitcard' }, h('div', { class: 'unit-head' },
-      h('div', null, h('h2', null, snap.name), h('p', { class: 'muted small' }, [i.model, i.firmware && `FW ${i.firmware}`, snap.host].filter(Boolean).join(' · '))),
-      h('div', { class: 'cstats' },
-        h('div', null, h('b', { class: 'num' }, `${snap.counts.on}`), h('span', null, 'an')),
-        h('div', null, h('b', { class: 'num' }, `${snap.counts.off}`), h('span', null, 'aus')),
-        h('div', null, h('b', { class: 'num' }, watts(snap.totals.power)), h('span', null, 'gesamt')),
-        h('a', { class: 'btn', href: `#/monitor/${snap.key}` }, I('pulse'), 'Monitoring')))));
   }
 
   // ---------- Aktionen ----------
@@ -220,7 +238,7 @@ export async function renderControl(root, routeKey) {
     try {
       if (outs.length === 1) {
         await api.power(key, outs[0].id, action);
-        toast(`${pad(outs[0])} ${title(outs[0])}: ${action === 'On' ? 'eingeschaltet' : action === 'Off' ? 'ausgeschaltet' : 'wird neu gestartet'}.`);
+        toast(`${pad(outs[0])} ${title(outs[0])}: ${action === 'On' ? 'eingeschaltet' : action === 'Off' ? 'ausgeschaltet' : 'neu gestartet'}.`);
       } else {
         const r = await api.bulk(key, outs.map((o) => o.id), action);
         const bad = Object.entries(r.results).filter(([, v]) => !v.ok);
@@ -235,23 +253,63 @@ export async function renderControl(root, routeKey) {
       outs.forEach((o) => st.pending.delete(o.id));
       refresh();
       setTimeout(() => loop.now(true), 700);
-      if (action === 'PowerCycle') setTimeout(() => loop.now(true), 6000);
       loadLog();
     }
   }
 
-  async function rename(o) {
-    const v = await promptBox(`Socket ${pad(o)} benennen`, o.label || '', `Name (max. 20 Zeichen: A–Z, 0–9, Leerzeichen, - und _ · leer = „Socket ${pad(o)}“)`);
-    if (v === null || v === (o.label || '')) return;
-    if (v.length > 20 || !/^[-_ a-zA-Z0-9]*$/.test(v)) {
-      toast('Die PDU erlaubt höchstens 20 Zeichen: Buchstaben ohne Umlaute, Ziffern, Leerzeichen, - und _.', 'err');
+  /** Name (auf der PDU) und Gruppe (in der App) eines Sockets bearbeiten. */
+  async function editDialog(o) {
+    const name = h('input', { value: o.label || '', maxlength: '20', autocomplete: 'off', 'aria-label': 'Name' });
+    const gi = groupInput(o.group, snap.groups || []);
+    const r = await modal({
+      title: `Socket ${pad(o)} bearbeiten`,
+      body: h('div', null,
+        h('label', null, 'Name ', h('small', null, `(auf der PDU · max. 20 Zeichen: A–Z, 0–9, Leerzeichen, - und _ · leer = „Socket ${pad(o)}“)`), name),
+        h('label', null, 'Gruppe ', h('small', null, '(in dieser App · leer = keine Gruppe)'), gi.input, gi.list)),
+      actions: [{ label: 'Abbrechen', value: false }, { label: 'Speichern', value: true, cls: 'primary' }],
+    });
+    if (r !== true) return;
+    const newName = name.value.trim();
+    const newGroup = gi.input.value.trim().replace(/\s+/g, ' ');
+    if (newName !== (o.label || '') && (newName.length > 20 || !NAME_RE.test(newName))) {
+      toast('Name: höchstens 20 Zeichen, nur Buchstaben ohne Umlaute, Ziffern, Leerzeichen, - und _.', 'err');
       return;
     }
     try {
-      const r = await api.label(key, o.id, v);
-      o.label = r.label || v;
-      refresh(); toast(`Socket ${pad(o)} heißt jetzt „${o.label}“.`); loop.now(true); loadLog();
+      if (newGroup !== (o.group || '')) {
+        await api.group(key, [o.id], newGroup);
+        o.group = newGroup;
+        if (newGroup && !snap.groups.includes(newGroup)) snap.groups.push(newGroup);
+      }
+      if (newName !== (o.label || '')) { const res = await api.label(key, o.id, newName); o.label = res.label || newName; }
+      st.sel.delete(o.id);
+      toast(`Socket ${pad(o)} gespeichert.`);
     } catch (e) { toast(e.message, 'err'); }
+    layout(); loop.now(true); loadLog();
+  }
+
+  /** Gruppe für mehrere Sockets setzen (Auswahlleiste). */
+  async function groupDialog(ids) {
+    if (!ids.length) return;
+    const outs = ids.map((id) => snap.outlets.find((o) => o.id === id)).filter(Boolean);
+    const common = outs.every((o) => o.group === outs[0].group) ? outs[0].group : '';
+    const gi = groupInput(common, snap.groups || []);
+    const r = await modal({
+      title: `Gruppe für ${outs.length} Socket${outs.length > 1 ? 's' : ''}`,
+      body: h('div', null, h('p', { class: 'modal-text' }, outs.slice(0, 10).map((o) => `${pad(o)} ${title(o)}`).join(', ') + (outs.length > 10 ? ' …' : '')),
+        h('label', null, 'Gruppe ', h('small', null, '(leer = aus der Gruppe nehmen)'), gi.input, gi.list)),
+      actions: [{ label: 'Abbrechen', value: false }, { label: 'Zuweisen', value: true, cls: 'primary' }],
+    });
+    if (r !== true) return;
+    const g = gi.input.value.trim().replace(/\s+/g, ' ');
+    try {
+      await api.group(key, outs.map((o) => o.id), g);
+      outs.forEach((o) => { o.group = g; });
+      if (g && !snap.groups.includes(g)) snap.groups.push(g);
+      st.sel.clear();
+      toast(g ? `${outs.length} Sockets in Gruppe „${g}“.` : `${outs.length} Sockets aus ihrer Gruppe genommen.`);
+    } catch (e) { toast(e.message, 'err'); }
+    layout(); loadLog();
   }
 
   async function loadLog() {
@@ -262,10 +320,10 @@ export async function renderControl(root, routeKey) {
         h('tbody', null, rows.map((e) => h('tr', null,
           h('td', { class: 'num', title: time(e.ts) }, ago(e.ts)),
           h('td', null, e.user),
-          h('td', null, h('span', { class: 'mono' }, String(e.num ?? e.outlet).padStart(2, '0')), e.label && e.action !== 'Label' ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
-          h('td', null, ACT_NAMES[e.action] || e.action, e.action === 'Label' && e.label ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
+          h('td', null, h('span', { class: 'mono' }, String(e.num ?? e.outlet).padStart(2, '0')), e.label && !['Label', 'Group'].includes(e.action) ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
+          h('td', null, ACT_NAMES[e.action] || e.action, ['Label', 'Group'].includes(e.action) && e.label ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
           h('td', null, e.ok ? h('span', { class: 'badge valid' }, 'OK') : h('span', { class: 'badge revoked', title: e.error || '' }, 'Fehler'))))))
-        : h('p', { class: 'pad muted' }, 'Noch keine Schaltvorgänge auf dieser PDU.'));
+        : h('p', { class: 'pad muted' }, 'Noch keine Vorgänge auf dieser PDU.'));
     } catch { /* ignore */ }
   }
 
@@ -274,10 +332,11 @@ export async function renderControl(root, routeKey) {
     try {
       snap = await api.pdu(key, force === true);
       session.snap = snap;
-      drawHead();
-      if (firstLayout || visible().map((o) => o.id).join(',') !== laidOut) { firstLayout = false; layout(); } else { chips(); refresh(); }
-      stamp.textContent = `Stand ${new Date(snap.ts * 1000).toLocaleTimeString('de-DE')}`;
+      if (firstLayout || layoutKey(sections(visible())) !== laidOut) { firstLayout = false; layout(); } else { chips(); refresh(); }
+      const stale = snap.age > 20;
+      stamp.textContent = `Stand ${new Date(snap.ts * 1000).toLocaleTimeString('de-DE')}${stale ? ' · wird aktualisiert …' : ''}`;
       stamp.classList.remove('bad-t');
+      if (stale) setTimeout(() => loop.now(), 1500); // gespeicherter Stand → gleich den frischen holen
     } catch (e) {
       if (!snap) grid.replaceChildren(h('div', { class: 'card err-card' }, h('h2', null, 'PDU nicht erreichbar'), h('p', null, e.message), h('p', { class: 'muted small' }, 'Neuer Versuch in wenigen Sekunden …')));
       else { stamp.textContent = `Keine Verbindung (${e.message}) · letzter Stand ${ago(snap.ts)}`; stamp.classList.add('bad-t'); }

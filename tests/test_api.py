@@ -183,3 +183,32 @@ def test_rittal_real(tmp_path, monkeypatch):
         assert c.put("/api/pdus/r/outlets/L1_2", json={"label": "Neu"}).status_code == 200
     finally:
         m.stop()
+
+
+def test_groups(client):
+    client.get("/api/pdus/labor-1")
+    assert client.put("/api/pdus/labor-1/groups", json={"ids": ["1", "2"], "group": "  Teststack   1 "}).get_json()["group"] == "Teststack 1"
+    s = client.get("/api/pdus/labor-1").get_json()
+    assert [o["group"] for o in s["outlets"][:3]] == ["Teststack 1", "Teststack 1", ""] and s["groups"] == ["Teststack 1"]
+    assert client.put("/api/pdus/labor-1/groups", json={"ids": ["2"], "group": ""}).status_code == 200
+    assert client.get("/api/pdus/labor-1").get_json()["outlets"][1]["group"] == ""
+    assert client.put("/api/pdus/labor-1/groups", json={"ids": ["99"], "group": "x"}).status_code == 404
+    assert client.put("/api/pdus/labor-1/groups", json={"ids": ["1"], "group": "x" * 40}).status_code == 400
+    assert client.get("/api/log?pdu=labor-1").get_json()[0]["action"] == "Group"
+
+
+def test_background_and_disk_cache(tmp_path, monkeypatch, pdus):
+    import time as _t
+    monkeypatch.setenv("PDU_USER", "apiuser")
+    monkeypatch.setenv("PDU_PASSWORD", "mock-secret-123")
+    a, _ = pdus
+    conf = parse_list(f"A={a.url}")
+    app = create_app(str(tmp_path), pdus=conf, secure_cookies=False, background=True)
+    for _ in range(50):  # Hintergrund liest die PDU ohne Aufruf
+        if app.clients["a"]._snap:
+            break
+        _t.sleep(0.1)
+    assert app.clients["a"]._snap and (tmp_path / "cache" / "a.json").exists()
+    # Neustart ohne Hintergrund: gespeicherter Stand ist sofort da
+    app2 = create_app(str(tmp_path), pdus=conf, secure_cookies=False, background=False)
+    assert app2.clients["a"].from_disk and len(app2.clients["a"]._snap["outlets"]) == 42

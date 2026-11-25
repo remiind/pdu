@@ -3,7 +3,8 @@
 Moderne Weboberfläche für **Rittal-PDUs** (getestet für 7979310 / 7979340, Firmware 10.2.1) über die **Redfish-REST-API** – als Ersatz für die eingebaute Weboberfläche.
 
 - **Monitoring**: Gesamtleistung, Energie, Phasen L1–L3 (Spannung, Strom, Auslastung, Leistung, Energie), Neutralleiter, Frequenz, Sicherungen, Verbrauch je Socket (sortier- und durchsuchbar), Leistungsverlauf live. Aktualisierung alle 5 Sekunden.
-- **Steuerung**: Sockets als Kacheln mit Schalter, gruppiert nach Phase, Filter (An/Aus/Phase/Suche), Mehrfachauswahl (Klick, Umschalt = Bereich) mit Einschalten / Ausschalten / Neu starten, Beschreibung ändern, Protokoll der Schaltvorgänge (wer, wann, was).
+- **Steuerung**: kompakte Socket-Kacheln mit Schalter (alle 42 auf einem Bildschirm), Ansicht nach Phase, Gruppe oder als Liste, Filter (An/Aus/Phase/Suche inkl. Gruppe), Mehrfachauswahl (Klick, Umschalt = Bereich) mit Einschalten / Ausschalten / Neu starten / Gruppe zuweisen, Name (auf der PDU) und Gruppe (in der App) bearbeiten, Protokoll (wer, wann, was).
+- **Schnell**: Der Server hält die Messwerte im Hintergrund aktuell und speichert den letzten Stand – Seiten erscheinen sofort statt nach mehreren Sekunden.
 - **PDU-Auswahl** oben auf jeder Seite, gruppiert nach Standort, mit Live-Leistung und Online-Status.
 - **Redfish-Explorer** (Admin): Rohdaten der PDU lesen und durch die `@odata.id`-Links klicken.
 - **Benutzer** wie in Plan: erster Login = Administrator; Benutzer können auf „nur ansehen“ gesetzt werden.
@@ -56,7 +57,7 @@ git pull && sudo docker compose up -d --build
 
 - Flask + Gunicorn (1 Prozess, 16 Threads), Python 3.13, keine externen Ressourcen (CSP `'self'`).
 - Redfish: Anmeldung per Session (`X-Auth-Token`, Rückfall auf Basic-Auth), Daten unter `/redfish/v1/PowerEquipment/RackPDUs/<id>` (`Mains`, `Branches`, `Outlets`, `Metrics`, `Sensors`), Schalten über `Outlet.PowerControl` (`On`, `Off`), Socket-Namen per `PATCH` auf `UserLabel`; da Rittal FW 10.2.1 das nicht speichert, schreibt die App dort über die interne Schnittstelle der Weboberfläche (`/cgi-bin/json.cgi`, `setValues` auf `DescName`, max. 20 Zeichen `A–Z 0–9 - _` und Leerzeichen) und prüft das Ergebnis per Redfish. Collections werden parallel einzeln geladen (Rittal liefert bei `$expand` unvollständige Daten), Zusatzwerte (Energie je Phase, Frequenz) aus den Chassis-Sensoren. Kennt die PDU kein `PowerCycle`, wird der Neustart als Aus → 5 s → An nachgebildet. Messwerte werden 2 s zwischengespeichert.
-- Daten (`$PDU_DATA`, Standard `/data`): `users.json` (Passwörter nur als scrypt-Hash), `secret.key`, `actions.jsonl` (Schaltprotokoll).
+- Daten (`$PDU_DATA`, Standard `/data`): `users.json` (Passwörter nur als scrypt-Hash), `secret.key`, `actions.jsonl` (Schaltprotokoll), `groups.json` (Socket-Gruppen), `cache/` (letzter Stand je PDU).
 
 ## Entwicklung
 
