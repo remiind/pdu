@@ -12,7 +12,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from .auth import can_control, init_auth
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 LABEL_MAX = 64
 
 CSP = (

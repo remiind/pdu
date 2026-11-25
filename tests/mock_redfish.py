@@ -13,7 +13,7 @@ from werkzeug.serving import make_server
 USER, PASSWORD = "apiuser", "mock-secret-123"
 
 
-def make_pdu(n_outlets=42, expand=False, model="PDU-SWI 7979340"):
+def make_pdu(n_outlets=42, expand=False, model="PDU-SWI 7979340", sessions=True):
     app = Flask("mock-redfish")
     tokens = set()
     P = "/redfish/v1/PowerEquipment/RackPDUs/1"
@@ -46,6 +46,8 @@ def make_pdu(n_outlets=42, expand=False, model="PDU-SWI 7979340"):
 
     @app.post("/redfish/v1/SessionService/Sessions")
     def login():
+        if not sessions:  # wie eine PDU, die keine Sessions für diesen Benutzer erlaubt
+            return jsonify(error={"code": "Base.1.8.InsufficientPrivilege", "message": "Session creation not permitted"}), 401
         b = request.get_json(force=True)
         if b.get("UserName") != USER or b.get("Password") != PASSWORD:
             return jsonify(error={"code": "Base.1.8.NoValidSession", "message": "Invalid credentials"}), 401

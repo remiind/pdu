@@ -107,23 +107,35 @@ class PduClient:
         self._expand = None  # None = unbekannt, True/False nach erstem Versuch
         self.last_error = None
         self.last_ok = 0.0
+        self.auth_mode = None
 
     # ---------- HTTP ----------
     def _login(self):
+        """Session anlegen; lehnt die PDU das ab, wird HTTP-Basic probiert. Fehler nennen Code + Text der PDU."""
         try:
             r = self.http.post(self.base + "/redfish/v1/SessionService/Sessions",
                                json={"UserName": self.user, "Password": self.password}, timeout=TIMEOUT)
         except requests.RequestException as e:
             raise RedfishError(f"PDU nicht erreichbar ({self.host}): {e.__class__.__name__}") from e
-        if r.status_code in (200, 201) and r.headers.get("X-Auth-Token"):
-            self.token = r.headers["X-Auth-Token"]
+        token = r.headers.get("X-Auth-Token")
+        if r.status_code in (200, 201, 204) and token:
+            self.token, self.basic = token, False
             self.session_uri = r.headers.get("Location")
-            self.basic = False
+            self.auth_mode = "Session"
             return
-        if r.status_code in (401, 403):
-            raise RedfishError("Anmeldung an der PDU fehlgeschlagen (Benutzer/Passwort prüfen)", 502)
-        # Session-Dienst nicht verfügbar → Basic-Auth versuchen
-        self.token, self.basic = None, True
+        sess_err = self._err_text(r)
+        # Rückfall: Basic-Auth an einer geschützten Ressource prüfen
+        try:
+            b = self.http.get(self.base + "/redfish/v1/PowerEquipment/RackPDUs", auth=(self.user, self.password), timeout=TIMEOUT)
+        except requests.RequestException as e:
+            raise RedfishError(f"PDU nicht erreichbar ({self.host}): {e.__class__.__name__}") from e
+        if b.status_code < 400:
+            self.token, self.basic = None, True
+            self.auth_mode = "Basic"
+            return
+        if not self.user or not self.password:
+            raise RedfishError("PDU_USER/PDU_PASSWORD sind im Container nicht gesetzt (.env prüfen)", 502)
+        raise RedfishError(f"Anmeldung an der PDU fehlgeschlagen – Session: {sess_err}; Basic: {self._err_text(b)}", 502)
 
     def _auth_headers(self):
         if self.token:

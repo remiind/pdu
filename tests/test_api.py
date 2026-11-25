@@ -103,3 +103,25 @@ def test_session_reused(client, pdus):
 
 def test_json_required(client):
     assert client.post("/api/pdus/labor-1/outlets/5/power", data="action=Off").status_code == 415
+
+
+def test_basic_fallback(tmp_path, monkeypatch):
+    m = Running(make_pdu(10, sessions=False))
+    try:
+        monkeypatch.setenv("PDU_USER", "apiuser")
+        monkeypatch.setenv("PDU_PASSWORD", "mock-secret-123")
+        app = create_app(str(tmp_path), pdus=parse_list(f"A={m.url}"), secure_cookies=False)
+        c = app.test_client()
+        c.post("/api/auth/setup", json={"name": "daniel", "password": "geheim12345"})
+        r = c.get("/api/pdus/a")
+        assert r.status_code == 200 and len(r.get_json()["outlets"]) == 10
+        assert app.clients["a"].auth_mode == "Basic"
+        assert c.post("/api/pdus/a/outlets/2/power", json={"action": "Off"}).status_code == 200
+        monkeypatch.setenv("PDU_PASSWORD", "falsch")
+        app2 = create_app(str(tmp_path), pdus=parse_list(f"A={m.url}"), secure_cookies=False)
+        c2 = app2.test_client()
+        c2.post("/api/auth/login", json={"name": "daniel", "password": "geheim12345"})
+        r = c2.get("/api/pdus/a")
+        assert r.status_code == 502 and "Session: PDU meldet 401" in r.get_json()["error"] and "Basic: PDU meldet 401" in r.get_json()["error"]
+    finally:
+        m.stop()
