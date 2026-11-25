@@ -114,6 +114,7 @@ class PduClient:
         self.last_error = None
         self.last_ok = 0.0
         self.auth_mode = None
+        self.label_field = None  # UserLabel oder ElectricalConsumerNames (wird beim ersten Umbenennen erkannt)
         self.auth_block = 0.0  # nach fehlgeschlagener Anmeldung bis zu diesem Zeitpunkt keine neuen Versuche
         self.auth_error = None
 
@@ -429,7 +430,19 @@ class PduClient:
         self.request("POST", (o or {}).get("target") or self._outlet(oid) + "/Actions/Outlet.PowerControl", {"PowerState": state})
 
     def set_label(self, oid, label):
-        self.request("PATCH", self._outlet(oid), {"UserLabel": label})
+        """Beschreibung setzen. Rittal (FW 10.2.1) lehnt jedes PATCH auf UserLabel mit ErrorValidating ab,
+        nimmt aber ElectricalConsumerNames an → dorthin schreiben (leer = zurück auf UserLabel der PDU)."""
+        if self.label_field != "ElectricalConsumerNames":
+            try:
+                self.request("PATCH", self._outlet(oid), {"UserLabel": label})
+                self.label_field = "UserLabel"
+                self.invalidate()
+                return
+            except RedfishError as e:
+                if e.status != 400:
+                    raise
+            self.label_field = "ElectricalConsumerNames"
+        self.request("PATCH", self._outlet(oid), {"ElectricalConsumerNames": [label] if label else []})
         self.invalidate()
 
 
@@ -538,7 +551,10 @@ def normalize(client, pdu, res):
         m = re.search(r"(\d+)\s*$", oid) or re.search(r"(\d+)\s*$", str(o.get("Name") or ""))
         outlets.append({
             "id": oid, "num": int(m.group(1)) if m else None,
-            "name": o.get("Name"), "label": o.get("UserLabel") or "",
+            "name": o.get("Name"),
+            # Anzeige: Gerätename (ElectricalConsumerNames, per API beschreibbar) vor der Rittal-Beschreibung (UserLabel)
+            "label": next((n for n in (o.get("ElectricalConsumerNames") or []) if isinstance(n, str) and n.strip()), None) or o.get("UserLabel") or "",
+            "pduLabel": o.get("UserLabel") or "",
             "type": _outlet_type(o.get("OutletType")), "state": o.get("PowerState"),
             "locked": bool(o.get("PowerControlLocked")),
             "phase": _phase(o.get("ElectricalContext")) or branch_phase.get(branch),

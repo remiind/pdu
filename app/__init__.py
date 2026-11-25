@@ -13,7 +13,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 LABEL_MAX = 64
 
 CSP = (

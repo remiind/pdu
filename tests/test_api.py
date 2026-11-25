@@ -167,5 +167,11 @@ def test_rittal_real(tmp_path, monkeypatch):
         assert r["ok"] and m.app.state["actions"][-4:] == [("L1_6", "Off"), ("L1_7", "Off"), ("L1_6", "On"), ("L1_7", "On")]
         assert c.post("/api/pdus/r/outlets/L1_8/power", json={"action": "Off"}).status_code == 200
         assert c.get("/api/pdus/r").get_json()["counts"]["off"] == 1
+        # Umbenennen: UserLabel wird abgelehnt → ElectricalConsumerNames
+        assert c.put("/api/pdus/r/outlets/L1_4", json={"label": "Core-SW 1"}).status_code == 200
+        o4 = c.get("/api/pdus/r").get_json()["outlets"][3]
+        assert o4["label"] == "Core-SW 1" and o4["pduLabel"] == "Socket 4" and m.app.outlets["L1_4"]["consumers"] == ["Core-SW 1"]
+        assert c.put("/api/pdus/r/outlets/L1_4", json={"label": ""}).status_code == 200  # leer = zurück auf Rittal-Beschreibung
+        assert c.get("/api/pdus/r").get_json()["outlets"][3]["label"] == "Socket 4"
     finally:
         m.stop()

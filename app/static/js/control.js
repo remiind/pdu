@@ -126,7 +126,7 @@ export async function renderControl(root, routeKey) {
       ph.textContent = o.phase || '';
       ph.hidden = !o.phase;
       label.replaceChildren(o.label ? o.label : h('span', { class: 'muted' }, o.name || `Socket ${pad(o)}`));
-      label.title = o.label ? `${o.label} (${o.name || o.id})` : '';
+      label.title = [o.label, o.pduLabel && o.pduLabel !== o.label ? `Beschreibung an der PDU: ${o.pduLabel}` : null, o.name || o.id].filter(Boolean).join('\n');
       stText.className = 'sstate ' + (on ? 'on' : o.state === 'Off' ? 'off' : '');
       stText.lastChild.textContent = pending ? 'schaltet …' : on ? 'An' : o.state === 'Off' ? 'Aus' : (o.state || '–');
       pw.textContent = on && o.power !== null ? `${watts(o.power)}${o.current !== null ? ` · ${fmt(o.current, 2)} A` : ''}` : '';
@@ -241,7 +241,7 @@ export async function renderControl(root, routeKey) {
   }
 
   async function rename(o) {
-    const v = await promptBox(`Beschreibung für Socket ${pad(o)}`, o.label || '', 'Beschreibung (leer = keine)');
+    const v = await promptBox(`Socket ${pad(o)} benennen`, o.label || '', o.pduLabel ? `Gerätename (leer = „${o.pduLabel}“ von der PDU)` : 'Gerätename');
     if (v === null || v === (o.label || '')) return;
     try { await api.label(key, o.id, v); o.label = v; refresh(); toast('Beschreibung gespeichert.'); loop.now(true); loadLog(); } catch (e) { toast(e.message, 'err'); }
   }

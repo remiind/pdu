@@ -213,7 +213,7 @@ def make_rittal(n_outlets=42, sid="43090021"):
         if short:
             return d
         d.update({"CurrentAmps": ex(f"{C}/Sensors/Current_L{o['phase']}_{o['num']}", 0.0), "OutletType": o["type"], "PowerState": "On" if o["on"] else "Off",
-                  "PowerEnabled": True, "UserLabel": o["label"], "Links": {"BranchCircuit": {"@odata.id": f"{P}/Branches/L{o['phase']}"}},
+                  "PowerEnabled": True, "UserLabel": o["label"], "ElectricalConsumerNames": o.get("consumers", []), "Links": {"BranchCircuit": {"@odata.id": f"{P}/Branches/L{o['phase']}"}},
                   "Actions": {"#Outlet.PowerControl": {"PowerState@Redfish.AllowableValues": ["On", "Off"], "target": f"{P}/Outlets/{oid}/Actions/Outlet.PowerControl"}}})
         return d
 
@@ -277,8 +277,15 @@ def make_rittal(n_outlets=42, sid="43090021"):
 
     @app.patch(P + "/Outlets/<oid>")
     def patch(oid):
-        outlets[oid]["label"] = request.get_json(force=True).get("UserLabel", outlets[oid]["label"])
-        return "", 204
+        b = request.get_json(force=True)
+        if "UserLabel" in b:  # echte FW 10.2.1: immer ErrorValidating
+            info = [{"Message": "error during validation of given values", "MessageId": "Base.1.8.ErrorValidating",
+                     "RelatedProperties": ["#/UserLabel"], "Resolution": "Please enter valid data"}]
+            import json as _j
+            return jsonify(error={"code": "Base.1.21.BadRequest", "message": _j.dumps(info)}), 400
+        if "ElectricalConsumerNames" in b:
+            outlets[oid]["consumers"] = b["ElectricalConsumerNames"]
+        return jsonify(outlet_json(oid)), 200
 
     @app.post(P + "/Outlets/<oid>/Actions/Outlet.PowerControl")
     def power(oid):
