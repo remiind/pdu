@@ -2,6 +2,7 @@
 
     python tests/mock_redfish.py 9101 42     # PDU mit 42 Sockets auf http://127.0.0.1:9101
 """
+import json
 import random
 import secrets
 import sys
@@ -187,7 +188,7 @@ def make_rittal(n_outlets=42, sid="43090021"):
     @app.before_request
     def check():
         state["calls"] += 1
-        if request.path == "/redfish/v1/SessionService/Sessions" and request.method == "POST":
+        if (request.path == "/redfish/v1/SessionService/Sessions" and request.method == "POST") or request.path.startswith("/cgi-bin/"):
             return None
         if request.headers.get("X-Auth-Token") in tokens:
             return None
@@ -295,6 +296,52 @@ def make_rittal(n_outlets=42, sid="43090021"):
         state["actions"].append((oid, ps))
         outlets[oid]["on"] = ps == "On"
         return "", 204
+
+    # ---- Rittal-Weboberfläche: /cgi-bin/json.cgi ----
+    web = {"sessions": set(), "logins": 0, "sets": []}
+    by_num = {o["num"]: oid for oid, o in outlets.items()}
+    descs = [{"name": "Total.Frequency.Value"}] * 129 + [{"name": "Sockets.General.Power On Delay Multiplier"}]
+    for n in range(1, n_outlets + 1):
+        descs += [{"name": f"Sockets.Socket {n:02d}.General.DescName", "dataType": "string",
+                   "constraints": {"maxLen": 20, "regExpr": "^([-_ a-zA-Z0-9]{0,20})$"}}] + \
+                 [{"name": f"Sockets.Socket {n:02d}.General.{x}"} for x in ("Circuit", "Socket Type", "Relay", "Power On Delay", "Sequence Mode", "Grouping", "Status")] + [{}]
+
+    @app.post("/cgi-bin/json.cgi")
+    def jsoncgi():
+        raw = request.get_data(as_text=True)
+        cmd, _, payload = raw.partition("=")
+        data = json.loads(payload or "{}")
+        if cmd == "createSession":
+            if data.get("username") != USER or data.get("password") != PASSWORD:
+                return jsonify(result=2)
+            t = secrets.token_hex(8)
+            web["sessions"].add(t)
+            web["logins"] += 1
+            r = jsonify(result=0, user={"name": USER})
+            r.set_cookie("sessionId", t, httponly=True)
+            r.set_cookie("restSessionId", t)
+            return r
+        if request.cookies.get("sessionId") not in web["sessions"]:
+            return jsonify(result=1)
+        if cmd == "getDeviceInfos":
+            return jsonify(result=0, deviceInfos=[{"deviceIndex": 1, "info": {"name": "PDU-Controller", "serialNumber": 42937128}},
+                                                  {"deviceIndex": 2, "info": {"name": "PDU-SWI", "serialNumber": int(sid)}}])
+        if cmd == "getDeviceDescriptions":
+            return jsonify(result=0, deviceDescriptions=[{"deviceIndex": 1, "descriptions": [{"name": "x"}]},
+                                                         {"deviceIndex": 2, "descriptions": descs}])
+        if cmd == "setValues":
+            for v in data.get("variables", []):
+                d = descs[v["variableIndex"]] if v.get("deviceIndex") == 2 and v["variableIndex"] < len(descs) else {}
+                import re as _re
+                m = _re.match(r"Sockets\.Socket (\d+)\.General\.DescName", d.get("name", ""))
+                if not m or not _re.fullmatch(d["constraints"]["regExpr"], str(v.get("value"))):
+                    return jsonify(result=3)
+                outlets[by_num[int(m.group(1))]]["label"] = v["value"]
+                web["sets"].append((v["variableIndex"], v["value"]))
+            return jsonify(result=0)
+        return jsonify(result=0)
+
+    app.web = web
 
     sensors = {f"Energy_L{k}": ("EnergykWh", "kWh", en[k], f"Line{k}ToNeutral") for k in (1, 2, 3)}
     sensors["Energy_AC1_Total"] = ("EnergykWh", "kWh", 10194415.0, "Total")

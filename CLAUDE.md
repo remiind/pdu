@@ -12,6 +12,7 @@ Weboberfläche für Rittal-PDUs (7979310 = 10 Sockets, 7979340 = 42 Sockets, Fir
 ## Aufbau
 ```
 app/__init__.py   Flask-App: PDU-Liste aus PDU_LIST, JSON-API, Schaltprotokoll, Sicherheits-Header (CSP, HSTS), HTTPS-Pflicht
+app/rittalweb.py  RittalWeb: Login + setValues an der Rittal-Weboberfläche, nur zum Umbenennen
 app/redfish.py    PduClient (Collections immer einzeln parallel laden – **kein $expand**, Rittal liefert dabei gekürzte Mitglieder; Session-Token, Retry bei 401; lehnt die PDU die Session ab → Basic-Auth, `auth_mode`; Fehlermeldung nennt Code + Text der PDU für beide Wege; nach Fehlschlag 300 s keine neuen Anmeldeversuche (`AUTH_BACKOFF`, schützt vor Account-Sperre); $expand oder parallele Einzelabrufe, Cache) + normalize()
 app/auth.py       Benutzer/Login aus Plan übernommen (users.json, scrypt, Cookie pdu_session); Flag `control` (False = nur ansehen)
 app/templates/index.html  SPA, lädt js/app.js
@@ -22,7 +23,7 @@ app/static/js/
   control.js   Socket-Kacheln (in-place aktualisiert, Gruppen nach Phase), Filter, Auswahl + Auswahlleiste, Bestätigung bei Aus/Neustart, Umbenennen, Protokoll
   explorer.js  Redfish-Rohdaten als Baum, Links auf @odata.id
   users.js · login.js · ui.js · util.js · icons.js · theme.js · api.js · session.js
-tests/mock_redfish.py  make_pdu() = generische DMTF-PDU · make_rittal() = Nachbau der echten Rittal 7979340 (Diagnose-Paket 25.11.2026); CLI: `python tests/mock_redfish.py 9101 42 rittal`
+tests/mock_redfish.py  make_pdu() = generische DMTF-PDU · make_rittal() = Nachbau der echten Rittal 7979340 inkl. /cgi-bin/json.cgi (Diagnose-Paket + rittal_probe 25.11.2026); CLI: `python tests/mock_redfish.py 9101 42 rittal`
 tools/rittal_probe.py  liest /cgi-bin/json.cgi der Rittal-Weboberfläche aus (createSession, getDeviceDescriptions …), nur lesend, Ausgabe ohne Passwort/Token
 tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht erreichbare
 ```
@@ -35,16 +36,16 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - Sockets ohne eigene Messung (CurrentAmps 0,0, kein PowerWatts) → `metering:false`, Strom/Leistung je Socket = null, Spalten werden ausgeblendet.
 - `Outlet.PowerControl` erlaubt nur On/Off → Neustart wird nachgebildet: einzeln Aus → `CYCLE_PAUSE` (5 s) → An; Auswahl: alle aus, warten, alle an.
 - Branches L1–L3 entsprechen den Phasen → Karte „Sicherungen“ wird dann ausgeblendet.
-- **Umbenennen:** PATCH auf `UserLabel` liefert immer 400 `ErrorValidating` (auch „Test“, jeder Socket; PATCH auf die PDU selbst: `key 'EquipmentType' not found`). `ElectricalConsumerNames` ist beschreibbar → `set_label()` probiert UserLabel und fällt auf `ElectricalConsumerNames:[name]` zurück (leer = `[]`), `label_field` merkt sich das. Anzeige: `label` = ElectricalConsumerNames[0] oder UserLabel, `pduLabel` = UserLabel.
-- **Weboberfläche** nutzt `POST /cgi-bin/json.cgi` (form-urlencoded `befehl={json}`): Login `createSession={"username","password","force":0}` → Cookie `sessionId` (+ `restSessionId`); Umbenennen `setValues={"variables":[{"deviceIndex":2,"variableIndex":139,"value":"…"}]}`; Variablenliste vermutlich aus `getDeviceDescriptions={"devices":[]}` (Zuordnung Socket → variableIndex noch offen).
+- **Umbenennen:** Redfish speichert nichts – PATCH `UserLabel` → 400 `ErrorValidating`, `ElectricalConsumerNames` → 200, wird aber verworfen. Lösung: `set_label()` probiert einmal PATCH `UserLabel` (andere Hersteller), merkt sich bei 400 `label_via="web"` und schreibt über `app/rittalweb.py` (json.cgi `setValues`). Danach wird `UserLabel` per Redfish nachgelesen (bis 3 s), sonst Fehler 409. Leer = „Socket NN“.
+- **Weboberfläche** (`app/rittalweb.py`): `POST /cgi-bin/json.cgi`, form-urlencoded, Rumpf `befehl={json}` unkodiert. Login `createSession={"username","password","force":0}` → `{"result":0}` + Cookie `sessionId` (Auto-Logout 1800 s → App meldet nach 1500 s neu an, bei `result≠0` einmal neu). `getDeviceInfos` (deviceIndex ↔ serialNumber; Gerät 2 = PDU-SWI mit Redfish-SN), `getDeviceDescriptions` (Variablen-Index = Position in `descriptions`, leere `{}` zählen mit). Socket-Name = `Sockets.Socket NN.General.DescName` (= Redfish `UserLabel`), Regeln `maxLen 20`, `^([-_ a-zA-Z0-9]{0,20})$`. Setzen: `setValues={"variables":[{"deviceIndex":2,"variableIndex":139,"value":"…"}]}` (Socket 02 → 139). Zuordnung 1 h gecacht.
 - Account braucht Redfish-Rechte (`apiuser` ohne Rechte → 401 auf Session und Basic).
 
 ## API
 - `GET /api/pdus` → `{pdus:[{key,name,group,host,error}], control}` · `GET /api/pdus/summary` → je PDU `{ok,power,model,health|error}` (nutzt Momentaufnahme < 15 s, sonst nur PDU + Metrics)
 - `GET /api/pdus/<key>[?force=1]` → Momentaufnahme `{info, phases[], totals{power,energy,frequency,neutral,current}, env, branches[], outlets[], sensors[], counts}`
-  - Outlet: `{id,num,name,label(ElectricalConsumerNames[0] oder UserLabel),pduLabel(UserLabel),type(C13/C19/…),state(PowerState),locked,phase(L1–L3 aus ElectricalContext oder Branch),branch,current,power,energy,voltage,rated,target,health,status}`
+  - Outlet: `{id,num,name,label(UserLabel),type(C13/C19/…),state(PowerState),locked,phase(L1–L3 aus ElectricalContext oder Branch),branch,current,power,energy,voltage,rated,target,health,status}`
   - Phasen aus einem Mains-Kreis mit `PolyPhase*` **oder** aus je einem Mains-Kreis pro Phase.
-- `POST /api/pdus/<key>/outlets/<id>/power {action:On|Off|PowerCycle}` · `POST /api/pdus/<key>/power {ids[],action}` (nacheinander) · `PUT /api/pdus/<key>/outlets/<id> {label}` → PATCH `UserLabel`, bei 400 `ElectricalConsumerNames`
+- `POST /api/pdus/<key>/outlets/<id>/power {action:On|Off|PowerCycle}` · `POST /api/pdus/<key>/power {ids[],action}` (nacheinander) · `PUT /api/pdus/<key>/outlets/<id> {label}` → `{ok,label}` (Redfish `UserLabel`, bei Rittal über json.cgi; max. 64, Rittal 20 Zeichen)
 - `GET /api/admin/diag/<key>` = Diagnose-Paket (Rohdaten PDU, Mains, Branches, 3 Outlets, Sensoren, DataSourceUri-Verweise, $expand-Test, Zeiten; Knopf im Redfish-Explorer)
 - `GET /api/log?pdu=<key>` (letzte 100) · `GET /api/admin/redfish/<key>?path=/redfish/v1/…` (nur GET, nur Admin)
 - Schalten/Umbenennen braucht `control` (Admins immer). POST/PUT nur mit JSON (415).
@@ -63,6 +64,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.3.0: Umbenennen funktioniert auf Rittal: über die interne json.cgi-Schnittstelle der Weboberfläche (DescName), Prüfung der Rittal-Regeln im Dialog, Nachlesen per Redfish; ElectricalConsumerNames-Umweg entfernt. Mock `make_rittal` kann json.cgi.
 - v0.2.3: Nach dem Umbenennen wird nachgelesen – speichert die PDU nicht, kommt eine klare Fehlermeldung statt „OK“; Protokoll zeigt Socket-Nummer statt ID.
 - v0.2.2: Umbenennen über `ElectricalConsumerNames` (Rittal lehnt `UserLabel` ab); Tooltip zeigt die Beschreibung an der PDU.
 - v0.2.1: Lesbare Fehlermeldungen der PDU (ExtendedInfo als Liste oder JSON-Text in „message“), Hinweis bei abgelehnter Beschreibung.

@@ -13,8 +13,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.2.3"
-LABEL_MAX = 64
+VERSION = "0.3.0"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -252,18 +251,19 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
         need_control()
         c = client(key)
         label = (require_json() or {}).get("label")
-        if not isinstance(label, str) or len(label.strip()) > LABEL_MAX:
-            abort(400, f"Beschreibung: höchstens {LABEL_MAX} Zeichen")
+        if not isinstance(label, str):
+            abort(400, "Name fehlt")
         label = label.strip()
+        if len(label) > 64:
+            abort(400, "Name: höchstens 64 Zeichen")
         old = label_of(c, oid)
         try:
-            c.set_label(oid, label)
+            name = c.set_label(oid, label)
         except RedfishError as e:
-            if e.status == 400:
-                raise RedfishError(f"Die PDU akzeptiert die Beschreibung „{label}“ nicht – {e}", 400) from e
+            audit(c, oid, "Label", False, str(e), label=f"{old or ''} → {label}")
             raise
-        audit(c, oid, "Label", True, label=f"{old or ''} → {label}")
-        return jsonify(ok=True)
+        audit(c, oid, "Label", True, label=f"{old or ''} → {name}")
+        return jsonify(ok=True, label=name)
 
     @app.get("/api/log")
     def action_log():

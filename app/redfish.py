@@ -14,6 +14,8 @@ import time
 import requests
 import urllib3
 
+from .rittalweb import RittalWeb, WebError
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TIMEOUT = (4, 12)  # Verbindungsaufbau, Antwort
@@ -114,7 +116,8 @@ class PduClient:
         self.last_error = None
         self.last_ok = 0.0
         self.auth_mode = None
-        self.label_field = None  # UserLabel oder ElectricalConsumerNames (wird beim ersten Umbenennen erkannt)
+        self.web = RittalWeb(self.base, user, password, verify_tls)  # nur zum Umbenennen
+        self.label_via = None  # "redfish" (UserLabel per PATCH) oder "web" (Rittal json.cgi), beim ersten Mal erkannt
         self.auth_block = 0.0  # nach fehlgeschlagener Anmeldung bis zu diesem Zeitpunkt keine neuen Versuche
         self.auth_error = None
 
@@ -430,27 +433,39 @@ class PduClient:
         self.request("POST", (o or {}).get("target") or self._outlet(oid) + "/Actions/Outlet.PowerControl", {"PowerState": state})
 
     def set_label(self, oid, label):
-        """Beschreibung setzen. Rittal (FW 10.2.1) lehnt jedes PATCH auf UserLabel mit ErrorValidating ab,
-        nimmt aber ElectricalConsumerNames an → dorthin schreiben (leer = zurück auf UserLabel der PDU)."""
-        if self.label_field != "ElectricalConsumerNames":
+        """Socket-Namen setzen. Rittal FW 10.2.1 speichert per Redfish weder `UserLabel` (400) noch
+        `ElectricalConsumerNames` (200, aber verworfen) → über die Weboberfläche (`DescName`) schreiben und
+        danach per Redfish prüfen, ob `UserLabel` den neuen Namen zeigt."""
+        snap = self._snap or self.snapshot()
+        o = next((x for x in snap["outlets"] if x["id"] == str(oid)), None)
+        if not o or o.get("num") is None:
+            raise RedfishError("Socket nicht gefunden", 404)
+        name = label.strip() or f"Socket {o['num']:02d}"  # leer = Rittal-Standardname
+        if self.label_via == "web":  # Regeln der Weboberfläche vorab prüfen (spart einen Anmeldevorgang)
             try:
-                self.request("PATCH", self._outlet(oid), {"UserLabel": label})
-                self.label_field = "UserLabel"
-                self.invalidate()
-                return
+                RittalWeb.check(name, None)
+            except WebError as e:
+                raise RedfishError(str(e), e.status) from e
+        if self.label_via != "web":  # Standardweg zuerst (andere Hersteller/Firmware)
+            try:
+                self.request("PATCH", self._outlet(oid), {"UserLabel": name})
+                self.label_via = "redfish"
             except RedfishError as e:
                 if e.status != 400:
                     raise
-            self.label_field = "ElectricalConsumerNames"
-        self.request("PATCH", self._outlet(oid), {"ElectricalConsumerNames": [label] if label else []})
+                self.label_via = "web"
+        if self.label_via == "web":
+            try:
+                self.web.set_name(snap["info"].get("serial"), o["num"], name)
+            except WebError as e:
+                raise RedfishError(str(e), e.status) from e
         self.invalidate()
-        # Rittal antwortet 200, speichert aber evtl. nicht → nachlesen
-        o = self.get(self._outlet(oid))
-        names = [n for n in (o.get("ElectricalConsumerNames") or []) if isinstance(n, str) and n.strip()]
-        if label and label not in names:
-            raise RedfishError("Die PDU hat die Änderung mit „OK“ beantwortet, aber nicht gespeichert "
-                               "(ElectricalConsumerNames bleibt leer) – Umbenennen per Redfish geht mit dieser Firmware nicht", 409)
-
+        for _ in range(6):  # die PDU braucht teils einen Moment, bis Redfish den Wert zeigt
+            cur = self.get(self._outlet(oid)).get("UserLabel")
+            if cur == name:
+                return name
+            time.sleep(0.5)
+        raise RedfishError(f"Die PDU hat „{name}“ angenommen, Redfish zeigt aber weiter „{cur}“", 409)
 
 def normalize(client, pdu, res):
     """Redfish-Rohdaten → kompaktes JSON für die Oberfläche."""
@@ -557,10 +572,7 @@ def normalize(client, pdu, res):
         m = re.search(r"(\d+)\s*$", oid) or re.search(r"(\d+)\s*$", str(o.get("Name") or ""))
         outlets.append({
             "id": oid, "num": int(m.group(1)) if m else None,
-            "name": o.get("Name"),
-            # Anzeige: Gerätename (ElectricalConsumerNames, per API beschreibbar) vor der Rittal-Beschreibung (UserLabel)
-            "label": next((n for n in (o.get("ElectricalConsumerNames") or []) if isinstance(n, str) and n.strip()), None) or o.get("UserLabel") or "",
-            "pduLabel": o.get("UserLabel") or "",
+            "name": o.get("Name"), "label": o.get("UserLabel") or "",
             "type": _outlet_type(o.get("OutletType")), "state": o.get("PowerState"),
             "locked": bool(o.get("PowerControlLocked")),
             "phase": _phase(o.get("ElectricalContext")) or branch_phase.get(branch),

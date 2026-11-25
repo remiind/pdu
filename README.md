@@ -55,7 +55,7 @@ git pull && sudo docker compose up -d --build
 ## Technik
 
 - Flask + Gunicorn (1 Prozess, 16 Threads), Python 3.13, keine externen Ressourcen (CSP `'self'`).
-- Redfish: Anmeldung per Session (`X-Auth-Token`, Rückfall auf Basic-Auth), Daten unter `/redfish/v1/PowerEquipment/RackPDUs/<id>` (`Mains`, `Branches`, `Outlets`, `Metrics`, `Sensors`), Schalten über `Outlet.PowerControl` (`On`, `Off`), Gerätename per `PATCH` auf `UserLabel` bzw. `ElectricalConsumerNames` (Rittal FW 10.2.1 lehnt `UserLabel` ab). Collections werden parallel einzeln geladen (Rittal liefert bei `$expand` unvollständige Daten), Zusatzwerte (Energie je Phase, Frequenz) aus den Chassis-Sensoren. Kennt die PDU kein `PowerCycle`, wird der Neustart als Aus → 5 s → An nachgebildet. Messwerte werden 2 s zwischengespeichert.
+- Redfish: Anmeldung per Session (`X-Auth-Token`, Rückfall auf Basic-Auth), Daten unter `/redfish/v1/PowerEquipment/RackPDUs/<id>` (`Mains`, `Branches`, `Outlets`, `Metrics`, `Sensors`), Schalten über `Outlet.PowerControl` (`On`, `Off`), Socket-Namen per `PATCH` auf `UserLabel`; da Rittal FW 10.2.1 das nicht speichert, schreibt die App dort über die interne Schnittstelle der Weboberfläche (`/cgi-bin/json.cgi`, `setValues` auf `DescName`, max. 20 Zeichen `A–Z 0–9 - _` und Leerzeichen) und prüft das Ergebnis per Redfish. Collections werden parallel einzeln geladen (Rittal liefert bei `$expand` unvollständige Daten), Zusatzwerte (Energie je Phase, Frequenz) aus den Chassis-Sensoren. Kennt die PDU kein `PowerCycle`, wird der Neustart als Aus → 5 s → An nachgebildet. Messwerte werden 2 s zwischengespeichert.
 - Daten (`$PDU_DATA`, Standard `/data`): `users.json` (Passwörter nur als scrypt-Hash), `secret.key`, `actions.jsonl` (Schaltprotokoll).
 
 ## Entwicklung

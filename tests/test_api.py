@@ -167,11 +167,19 @@ def test_rittal_real(tmp_path, monkeypatch):
         assert r["ok"] and m.app.state["actions"][-4:] == [("L1_6", "Off"), ("L1_7", "Off"), ("L1_6", "On"), ("L1_7", "On")]
         assert c.post("/api/pdus/r/outlets/L1_8/power", json={"action": "Off"}).status_code == 200
         assert c.get("/api/pdus/r").get_json()["counts"]["off"] == 1
-        # Umbenennen: UserLabel wird abgelehnt → ElectricalConsumerNames
-        assert c.put("/api/pdus/r/outlets/L1_4", json={"label": "Core-SW 1"}).status_code == 200
-        o4 = c.get("/api/pdus/r").get_json()["outlets"][3]
-        assert o4["label"] == "Core-SW 1" and o4["pduLabel"] == "Socket 4" and m.app.outlets["L1_4"]["consumers"] == ["Core-SW 1"]
-        assert c.put("/api/pdus/r/outlets/L1_4", json={"label": ""}).status_code == 200  # leer = zurück auf Rittal-Beschreibung
-        assert c.get("/api/pdus/r").get_json()["outlets"][3]["label"] == "Socket 4"
+        # Umbenennen: Redfish lehnt UserLabel ab → Weboberfläche (json.cgi, DescName)
+        r = c.put("/api/pdus/r/outlets/L1_2", json={"label": "Core-SW 1"})
+        assert r.status_code == 200 and r.get_json()["label"] == "Core-SW 1"
+        assert m.app.web["sets"][-1] == (139, "Core-SW 1")  # Socket 02 → Variable 139 wie auf der echten PDU
+        assert c.get("/api/pdus/r").get_json()["outlets"][1]["label"] == "Core-SW 1"
+        logins = m.app.web["logins"]
+        assert c.put("/api/pdus/r/outlets/L1_3", json={"label": "AP_Lab-3"}).status_code == 200
+        assert m.app.web["logins"] == logins  # Sitzung wird wiederverwendet
+        bad = c.put("/api/pdus/r/outlets/L1_3", json={"label": "Prüfstand/1"})
+        assert bad.status_code == 400 and "höchstens 20 Zeichen" in bad.get_json()["error"]
+        assert c.put("/api/pdus/r/outlets/L1_3", json={"label": "x" * 21}).status_code == 400
+        assert c.put("/api/pdus/r/outlets/L1_2", json={"label": ""}).get_json()["label"] == "Socket 02"  # leer = Standardname
+        m.app.web["sessions"].clear()  # Sitzung abgelaufen → neu anmelden
+        assert c.put("/api/pdus/r/outlets/L1_2", json={"label": "Neu"}).status_code == 200
     finally:
         m.stop()
