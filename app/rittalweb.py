@@ -106,6 +106,12 @@ class RittalWeb:
     def set_name(self, serial, num, name):
         di, vi, cons = self.name_var(serial, num)
         self.check(name, cons)
+        # wie der Browser (und der erfolgreiche Schreibtest): looseFocus 1 → setValues → looseFocus 0
+        self.call("looseFocus", {"focus": 1})
         j = self.call("setValues", {"variables": [{"deviceIndex": di, "variableIndex": vi, "value": name}]})
+        try:
+            self.call("looseFocus", {"focus": 0})
+        except WebError:
+            pass
         if j.get("result") != 0:
             raise WebError(f"Die PDU hat den Namen nicht übernommen (result {j.get('result')})", 409)

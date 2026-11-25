@@ -37,7 +37,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - `Outlet.PowerControl` erlaubt nur On/Off → Neustart wird nachgebildet: einzeln Aus → `CYCLE_PAUSE` (5 s) → An; Auswahl: alle aus, warten, alle an.
 - Branches L1–L3 entsprechen den Phasen → Karte „Sicherungen“ wird dann ausgeblendet.
 - **Umbenennen:** Redfish speichert nichts – PATCH `UserLabel` → 400 `ErrorValidating`, `ElectricalConsumerNames` → 200, wird aber verworfen. Lösung: `set_label()` probiert einmal PATCH `UserLabel` (andere Hersteller), merkt sich bei 400 `label_via="web"` und schreibt über `app/rittalweb.py` (json.cgi `setValues`). Danach wird `UserLabel` per Redfish nachgelesen (bis 3 s), sonst Fehler 409. Leer = „Socket NN“.
-- **Weboberfläche** (`app/rittalweb.py`): `POST /cgi-bin/json.cgi`, form-urlencoded, Rumpf `befehl={json}` unkodiert. Login `createSession={"username","password","force":0}` → `{"result":0}` + Cookie `sessionId` (Auto-Logout 1800 s → App meldet nach 1500 s neu an, bei `result≠0` einmal neu). `getDeviceInfos` (deviceIndex ↔ serialNumber; Gerät 2 = PDU-SWI mit Redfish-SN), `getDeviceDescriptions` (Variablen-Index = Position in `descriptions`, leere `{}` zählen mit). Socket-Name = `Sockets.Socket NN.General.DescName` (= Redfish `UserLabel`), Regeln `maxLen 20`, `^([-_ a-zA-Z0-9]{0,20})$`. Setzen: `setValues={"variables":[{"deviceIndex":2,"variableIndex":139,"value":"…"}]}` (Socket 02 → 139). Zuordnung 1 h gecacht.
+- **Weboberfläche** (`app/rittalweb.py`): `POST /cgi-bin/json.cgi`, form-urlencoded, Rumpf `befehl={json}` unkodiert. Login `createSession={"username","password","force":0}` → `{"result":0}` + Cookie `sessionId` (Auto-Logout 1800 s → App meldet nach 1500 s neu an, bei `result≠0` einmal neu). `getDeviceInfos` (deviceIndex ↔ serialNumber; Gerät 2 = PDU-SWI mit Redfish-SN), `getDeviceDescriptions` (Variablen-Index = Position in `descriptions`, leere `{}` zählen mit). Socket-Name = `Sockets.Socket NN.General.DescName` (= Redfish `UserLabel`), Regeln `maxLen 20`, `^([-_ a-zA-Z0-9]{0,20})$`. Setzen (wie Browser: `looseFocus={"focus":1}` → `setValues` → `looseFocus={"focus":0}`, am 25.11. mit `rittal_probe --set` auf der echten PDU bestätigt): `setValues={"variables":[{"deviceIndex":2,"variableIndex":139,"value":"…"}]}` (Socket 02 → 139). Zuordnung 1 h gecacht.
 - Account braucht Redfish-Rechte (`apiuser` ohne Rechte → 401 auf Session und Basic).
 
 ## API
@@ -64,6 +64,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.3.1: Umbenennen schickt wie der Browser `looseFocus` vor/nach `setValues` (Schreibtest auf echter PDU erfolgreich).
 - v0.3.0: Umbenennen funktioniert auf Rittal: über die interne json.cgi-Schnittstelle der Weboberfläche (DescName), Prüfung der Rittal-Regeln im Dialog, Nachlesen per Redfish; ElectricalConsumerNames-Umweg entfernt. Mock `make_rittal` kann json.cgi.
 - v0.2.3: Nach dem Umbenennen wird nachgelesen – speichert die PDU nicht, kommt eine klare Fehlermeldung statt „OK“; Protokoll zeigt Socket-Nummer statt ID.
 - v0.2.2: Umbenennen über `ElectricalConsumerNames` (Rittal lehnt `UserLabel` ab); Tooltip zeigt die Beschreibung an der PDU.
