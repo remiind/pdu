@@ -1,0 +1,27 @@
+# PDU hinter einem vorhandenen Reverse Proxy (Caddy auf docksrv, Docker-Netzwerk "proxy"):
+#   docker compose up -d --build
+# PDU veröffentlicht keinen Port; der Proxy erreicht sie als  pdu:8080  (Caddyfile-Eintrag siehe README).
+# Ohne vorhandenen Proxy: docker-compose.standalone.yml (bringt eigenen Caddy mit).
+services:
+  pdu:
+    build: .
+    image: ghcr.io/remiind/pdu:latest
+    container_name: pdu
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PDU_TRUST_PROXY: "1"
+      PDU_REQUIRE_HTTPS: "1"
+    volumes:
+      - /opt/stacks/pdu/data:/data   # Host-Ordner, chown 10001
+    networks: [proxy]
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    external: true

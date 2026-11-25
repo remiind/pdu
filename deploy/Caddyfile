@@ -1,0 +1,11 @@
+# Reverse Proxy für PDU – nur HTTPS (Port 80 wird nicht veröffentlicht, keine Weiterleitung)
+{
+	auto_https disable_redirects
+}
+
+https://{$PDU_HOST:localhost} {
+	# internal = Caddy-eigene CA (LAN). Für ein öffentliches Zertifikat PDU_TLS=<E-Mail> setzen.
+	tls {$PDU_TLS:internal}
+	encode zstd gzip
+	reverse_proxy pdu:8080
+}

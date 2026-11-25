@@ -1,0 +1,47 @@
+# Eigenständig mit eigenem Caddy (HTTPS), z. B. auf tmplubuntu26 neben Plan:
+#   cp .env.example .env  →  .env anpassen  →  docker compose -f docker-compose.standalone.yml up -d --build
+# Erreichbar nur über  https://$PDU_HOST:$PDU_HTTPS_PORT  (Standard 8443, damit Plan auf 443 bleiben kann).
+services:
+  pdu:
+    build: .
+    image: ghcr.io/remiind/pdu:latest
+    container_name: pdu
+    restart: unless-stopped
+    expose:
+      - "8080"
+    env_file: .env             # PDU_LIST, PDU_USER, PDU_PASSWORD …
+    environment:
+      PDU_TRUST_PROXY: "1"     # X-Forwarded-* von Caddy auswerten
+      PDU_REQUIRE_HTTPS: "1"   # alles außer /healthz nur per HTTPS
+    volumes:
+      - pdu-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2
+    container_name: pdu-caddy
+    restart: unless-stopped
+    depends_on: [pdu]
+    ports:
+      - "${PDU_HTTPS_PORT:-8443}:443"
+    environment:
+      PDU_HOST: ${PDU_HOST:-localhost}
+      PDU_TLS: ${PDU_TLS:-internal}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  pdu-data:
+  caddy-data:
+  caddy-config:
