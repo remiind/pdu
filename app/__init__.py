@@ -14,7 +14,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -48,9 +48,10 @@ def parse_list(raw):
 
 
 GROUP_MAX = 32
-WATCH_S = 600       # so lange nach dem letzten Aufruf gilt eine PDU als „angesehen“
-WARM_S = 4          # angesehene PDUs: so oft im Hintergrund neu lesen
-IDLE_S = 120        # nicht angesehene PDUs: so oft (damit der erste Aufruf sofort Daten hat)
+WATCH_S = 600                                           # so lange nach dem letzten Aufruf gilt eine PDU als „angesehen“
+WARM_S = float(os.environ.get("PDU_REFRESH_ACTIVE", "5"))   # angesehene PDUs: so oft im Hintergrund neu lesen
+IDLE_S = float(os.environ.get("PDU_REFRESH", "10"))         # alle anderen: dauerhaft so oft (Cache immer frisch)
+RETRY_S = 30                                            # nicht erreichbare PDU: Pause bis zum nächsten Versuch
 
 
 def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
@@ -211,9 +212,10 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
             try:
                 c.snapshot(force=True)
                 c.from_disk = False
+                c.fail_t = 0.0
                 save_cache(c)
             except Exception:  # noqa: BLE001 – Fehler stehen in c.last_error
-                pass
+                c.fail_t = time.time()
             finally:
                 with lock:
                     busy.discard(c.key)
@@ -228,8 +230,9 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
                     snap = c._snap
                     age = now - snap["ts"] if snap and not c.from_disk else 1e9
                     hot = now - watched.get(key, 0) < WATCH_S
-                    if pending_refresh.pop(key, False) or age >= (WARM_S if hot else IDLE_S):
-                        if c.auth_block > now:
+                    wanted = pending_refresh.pop(key, False)
+                    if wanted or age >= (WARM_S if hot else IDLE_S):
+                        if c.auth_block > now or (not wanted and now - getattr(c, "fail_t", 0) < RETRY_S):
                             continue
                         with lock:
                             busy.add(key)
@@ -305,11 +308,18 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None, background=None):
         watched[key] = time.time()
         force = request.args.get("force") == "1"
         snap = c._snap
-        # Sofort antworten, wenn der Hintergrund einen frischen Stand hat (oder ein gespeicherter vorliegt und
-        # gerade neu gelesen wird); sonst – und bei „Aktualisieren“ – direkt bei der PDU nachfragen.
-        fresh = c._snap_t and time.time() - snap["ts"] < max(WARM_S * 3, 15) if snap else False  # _snap_t = 0 → nach Schalten verworfen
-        if not force and snap and (fresh or (c.from_disk and background and refresh_soon(key))):
-            return jsonify(decorate(snap))
+        # Immer sofort den letzten Stand liefern – der Hintergrund hält ihn frisch. Direkt bei der PDU nachfragen
+        # nur bei „Aktualisieren“ (force), direkt nach dem Schalten (Stand verworfen) oder ohne vorhandenen Stand.
+        if not force and snap:
+            age = time.time() - snap["ts"]
+            invalidated = not c._snap_t and not c.from_disk
+            if background:
+                if invalidated or c.from_disk or age > IDLE_S * 2:
+                    refresh_soon(key)
+                if not invalidated:
+                    return jsonify(decorate(snap))
+            elif not invalidated and not c.from_disk and age < 15:
+                return jsonify(decorate(snap))
         snap = c.snapshot(force=force)
         save_cache(c)
         return jsonify(decorate(snap))

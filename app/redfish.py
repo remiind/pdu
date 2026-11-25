@@ -275,7 +275,7 @@ class PduClient:
     def invalidate(self):
         self._snap_t = 0.0
 
-    def summary(self, max_age=15.0):
+    def summary(self, max_age=30.0):
         """Kurzstatus für die PDU-Auswahl: nutzt eine frische Momentaufnahme, sonst nur PDU + Metrics."""
         snap = self._snap
         if snap and time.time() - self._snap_t < max_age:

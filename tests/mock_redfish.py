@@ -7,6 +7,7 @@ import random
 import secrets
 import sys
 import threading
+import time
 
 from flask import Flask, jsonify, request
 from werkzeug.serving import make_server
@@ -163,7 +164,7 @@ def make_pdu(n_outlets=42, expand=False, model="PDU-SWI 7979340", sessions=True)
     return app
 
 
-def make_rittal(n_outlets=42, sid="43090021"):
+def make_rittal(n_outlets=42, sid="43090021", delay=0.0):
     """Nachbau des echten Verhaltens einer Rittal PDU-SWI 7979340 (FW 10.2.1), siehe Diagnose-Paket:
     Outlet-IDs „L3_34“, Readings als Excerpt mit DataSourceUri, kein Strom je Socket (0,0 A),
     PowerControl nur On/Off, $expand liefert gekürzte Mitglieder, Energie je Phase nur als Chassis-Sensor,
@@ -185,9 +186,14 @@ def make_rittal(n_outlets=42, sid="43090021"):
     vol = {1: 227.8, 2: 226.7, 3: 227.1}
     en = {1: 17.4, 2: 22.4, 3: 235.2}
 
+    slow = threading.Lock()
+
     @app.before_request
     def check():
         state["calls"] += 1
+        if delay:  # wie die echte PDU: ~0,07 s je Anfrage, eine nach der anderen
+            with slow:
+                time.sleep(delay)
         if (request.path == "/redfish/v1/SessionService/Sessions" and request.method == "POST") or request.path.startswith("/cgi-bin/"):
             return None
         if request.headers.get("X-Auth-Token") in tokens:
@@ -381,5 +387,5 @@ if __name__ == "__main__":
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 42
     random.seed(port)
     mode = sys.argv[3] if len(sys.argv) > 3 else ""
-    app = make_rittal(n) if mode == "rittal" else make_pdu(n, expand=mode == "expand")
+    app = make_rittal(n, sid=str(43090000 + port % 100), delay=float(sys.argv[4]) if len(sys.argv) > 4 else 0.0) if mode == "rittal" else make_pdu(n, expand=mode == "expand")
     app.run(port=port, threaded=True)

@@ -212,3 +212,21 @@ def test_background_and_disk_cache(tmp_path, monkeypatch, pdus):
     # Neustart ohne Hintergrund: gespeicherter Stand ist sofort da
     app2 = create_app(str(tmp_path), pdus=conf, secure_cookies=False, background=False)
     assert app2.clients["a"].from_disk and len(app2.clients["a"]._snap["outlets"]) == 42
+
+
+def test_serves_cache_immediately(tmp_path, monkeypatch, pdus):
+    """Mit Hintergrund: auch ein älterer Stand wird sofort geliefert (und neu angestoßen), statt zu warten."""
+    import time as _t
+    monkeypatch.setenv("PDU_USER", "apiuser")
+    monkeypatch.setenv("PDU_PASSWORD", "mock-secret-123")
+    a, _ = pdus
+    app = create_app(str(tmp_path), pdus=parse_list(f"A={a.url}"), secure_cookies=False, background=True)
+    c = app.test_client()
+    c.post("/api/auth/setup", json={"name": "daniel", "password": "geheim12345"})
+    for _ in range(50):
+        if app.clients["a"]._snap:
+            break
+        _t.sleep(0.1)
+    app.clients["a"]._snap = {**app.clients["a"]._snap, "ts": _t.time() - 300}  # künstlich alt
+    r = c.get("/api/pdus/a").get_json()
+    assert r["age"] >= 299  # sofort aus dem Speicher, nicht direkt gelesen

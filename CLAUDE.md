@@ -42,7 +42,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 
 ## Gruppen & Tempo
 - **Gruppen** gehören der App (die PDU kennt nur numerische Gruppen 0–99): `$PDU_DATA/groups.json` `{pdu-key: {socket-id: name}}`, max. 32 Zeichen. `decorate()` legt `group` je Outlet und `groups` (alle Namen über alle PDUs, für Vorschläge) über die Momentaufnahme – nie in den Cache.
-- **Tempo:** Eine Rittal-Momentaufnahme braucht ~50 Redfish-Abrufe à ~0,07 s (kein `$expand`), die PDU bedient sie nacheinander → 3–4 s. Deshalb hält ein Hintergrund-Thread (`refresher`, `PDU_BACKGROUND=1`) die Stände warm: angesehene PDUs (`WATCH_S`=600 s nach letztem Aufruf) alle `WARM_S`=4 s, andere alle `IDLE_S`=120 s. `GET /api/pdus/<key>` antwortet sofort aus dem Speicher (≤ 15 s alt, nicht durch Schalten verworfen), `?force=1` liest direkt. Jeder Stand wird nach `$PDU_DATA/cache/<key>.json` geschrieben und beim Start geladen (`from_disk`) → erste Anzeige nach Neustart sofort, Feld `age` zeigt das Alter, die Oberfläche holt dann gleich den frischen Stand. Tests laufen ohne Hintergrund (`tests/conftest.py`).
+- **Tempo:** Eine Rittal-Momentaufnahme braucht ~50 Redfish-Abrufe à ~0,07 s (kein `$expand`), die PDU bedient sie nacheinander → 3–4 s. Deshalb liest ein Hintergrund-Thread (`refresher`, `PDU_BACKGROUND=1`) **alle PDUs dauerhaft**: angesehene (`WATCH_S`=600 s nach letztem Aufruf) alle `PDU_REFRESH_ACTIVE`=5 s, alle anderen alle `PDU_REFRESH`=10 s (Abstand zählt ab Ende des letzten Abrufs → PDU ist ~25–40 % der Zeit beschäftigt). Nicht erreichbare PDUs: Pause `RETRY_S`=30 s. `GET /api/pdus/<key>` liefert **immer sofort** den letzten Stand (stößt bei Bedarf einen Abruf an); direkt gelesen wird nur bei `?force=1`, direkt nach dem Schalten (Stand verworfen) oder ohne vorhandenen Stand. Mock mit Trägheit: `python tests/mock_redfish.py 9101 42 rittal 0.07` (direkter Abruf ~8 s, mit Cache 0,06 s). Jeder Stand wird nach `$PDU_DATA/cache/<key>.json` geschrieben und beim Start geladen (`from_disk`) → erste Anzeige nach Neustart sofort, Feld `age` zeigt das Alter, die Oberfläche holt dann gleich den frischen Stand. Tests laufen ohne Hintergrund (`tests/conftest.py`).
 
 ## API
 - `GET /api/pdus` → `{pdus:[{key,name,group,host,error}], control}` · `GET /api/pdus/summary` → je PDU `{ok,power,model,health|error}` (nutzt Momentaufnahme < 15 s, sonst nur PDU + Metrics)
@@ -56,7 +56,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - Schalten/Umbenennen braucht `control` (Admins immer). POST/PUT nur mit JSON (415).
 
 ## Konfiguration (.env)
-`PDU_LIST` (`Gruppe/Name=Host; …`), `PDU_USER`, `PDU_PASSWORD`, `PDU_VERIFY_TLS` (0), `PDU_CACHE_SECONDS` (2), `PDU_BACKGROUND` (1), `PDU_HOST`/`PDU_TLS`/`PDU_HTTPS_PORT` (nur Standalone-Caddy). Gunicorn: 1 Worker (Sessions/Cache im Prozess), 16 Threads.
+`PDU_LIST` (`Gruppe/Name=Host; …`), `PDU_USER`, `PDU_PASSWORD`, `PDU_VERIFY_TLS` (0), `PDU_CACHE_SECONDS` (2), `PDU_BACKGROUND` (1), `PDU_REFRESH` (10 s), `PDU_REFRESH_ACTIVE` (5 s), `PDU_HOST`/`PDU_TLS`/`PDU_HTTPS_PORT` (nur Standalone-Caddy). Gunicorn: 1 Worker (Sessions/Cache im Prozess), 16 Threads.
 
 ## Befehle
 ```bash
@@ -69,6 +69,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.4.1: Alle PDUs werden dauerhaft alle 10 s (angesehene alle 5 s) im Hintergrund gelesen; Seiten zeigen immer sofort den letzten Stand; Pause bei nicht erreichbaren PDUs; Mock mit realistischer Trägheit.
 - v0.4.0: Kompakte Kacheln (alle 42 Sockets auf einem Bildschirm), Socket-Gruppen (Dialog, Auswahl, Ansicht „Gruppe“, Suche, Monitoring-Spalte), Hintergrund-Aktualisierung + gespeicherter Stand → Steuerung/Monitoring erscheinen sofort.
 - v0.3.1: Umbenennen schickt wie der Browser `looseFocus` vor/nach `setValues` (Schreibtest auf echter PDU erfolgreich).
 - v0.3.0: Umbenennen funktioniert auf Rittal: über die interne json.cgi-Schnittstelle der Weboberfläche (DescName), Prüfung der Rittal-Regeln im Dialog, Nachlesen per Redfish; ElectricalConsumerNames-Umweg entfernt. Mock `make_rittal` kann json.cgi.
