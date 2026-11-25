@@ -6,6 +6,8 @@ Nur lesend – es wird nichts geändert. Nur Python-Standardbibliothek.
 
     python3 tools/rittal_probe.py 10.1.0.21 admin
       → fragt nach dem Passwort, legt ./rittal-probe/ an (ohne Passwort/Token)
+    python3 tools/rittal_probe.py 10.1.0.21 admin --set 2 "Test7"
+      → Schreibtest: setzt den Namen von Socket 02 und zeigt jede Antwort der PDU roh an
 """
 import getpass
 import http.cookiejar
@@ -16,6 +18,11 @@ import ssl
 import sys
 import urllib.request
 
+SET = None
+if "--set" in sys.argv:
+    i = sys.argv.index("--set")
+    SET = (int(sys.argv[i + 1]), sys.argv[i + 2])
+    del sys.argv[i:i + 3]
 host = sys.argv[1] if len(sys.argv) > 1 else input("PDU-Adresse: ")
 user = sys.argv[2] if len(sys.argv) > 2 else input("Benutzer: ")
 pw = getpass.getpass(f"Passwort für {user}@{host}: ")
@@ -58,6 +65,38 @@ if not list(jar):  # Token steht evtl. nur in der Antwort
     if m:
         extra_cookie = {"sessionId": m.group(0), "restSessionId": m.group(0)}
         print("  Token aus der Antwort übernommen (als Cookie sessionId)")
+
+if SET:
+    num, name = SET
+    st, _, raw = call("getDeviceDescriptions", {"devices": []})
+    descs = json.loads(raw).get("deviceDescriptions") or []
+    hit = None
+    for dev in descs:
+        for vi, v in enumerate(dev.get("descriptions") or []):
+            if v.get("name") == f"Sockets.Socket {num:02d}.General.DescName":
+                hit = (dev["deviceIndex"], vi)
+    print(f"→ Socket {num:02d}: DescName = deviceIndex/variableIndex {hit}")
+    if not hit:
+        sys.exit(1)
+
+    def show_value(tag):
+        st, _, raw = call("getProcessData", {"lastTimestamp": 0})
+        vals = json.loads(raw).get("values") or []
+        cur = next((v for v in vals if (v.get("deviceIndex"), v.get("variableIndex")) == hit), None)
+        print(f"→ getProcessData {tag}: {cur}")
+
+    show_value("vorher")
+    for step, (cmd, payload) in enumerate([("looseFocus", {"focus": 1}),
+                                           ("setValues", {"variables": [{"deviceIndex": hit[0], "variableIndex": hit[1], "value": name}]}),
+                                           ("looseFocus", {"focus": 0})], 1):
+        st, hdr, raw = call(cmd, payload)
+        print(f"→ {cmd}: Status {st}, Antwort: {mask(raw)[:400]}")
+    import time
+    for wait in (0, 2, 5):
+        time.sleep(wait)
+        show_value(f"nach {wait} s")
+    print("\nBitte die komplette Ausgabe hier oben kopieren.")
+    sys.exit(0)
 
 for n, (cmd, payload) in enumerate([("getDeviceDescriptions", {"devices": []}), ("getDeviceInfos", {"devices": []}),
                                     ("getProcessData", {"lastTimestamp": 0}), ("getFeatures", {})], start=2):
