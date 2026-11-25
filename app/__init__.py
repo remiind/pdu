@@ -13,7 +13,7 @@ from .auth import can_control, init_auth
 from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 LABEL_MAX = 64
 
 CSP = (
@@ -98,7 +98,7 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
 
     def audit(pdu, outlet, action, ok, err=None, label=None):
         entry = {"ts": int(time.time()), "user": g.user["name"], "pdu": pdu.key, "pduName": pdu.name,
-                 "outlet": outlet, "label": label, "action": action, "ok": ok}
+                 "outlet": outlet, "num": num_of(pdu, outlet), "label": label, "action": action, "ok": ok}
         if err:
             entry["error"] = err
         with open(log_path, "a", encoding="utf-8") as fh:
@@ -117,6 +117,10 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
                     fcntl.flock(fh, fcntl.LOCK_UN)
         except OSError:
             pass
+
+    def num_of(c, oid):
+        o = next((x for x in ((c._snap or {}).get("outlets") or []) if x["id"] == str(oid)), None)
+        return o.get("num") if o else None
 
     def label_of(c, oid):
         snap = c._snap

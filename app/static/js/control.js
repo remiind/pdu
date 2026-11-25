@@ -254,7 +254,7 @@ export async function renderControl(root, routeKey) {
         h('tbody', null, rows.map((e) => h('tr', null,
           h('td', { class: 'num', title: time(e.ts) }, ago(e.ts)),
           h('td', null, e.user),
-          h('td', null, h('span', { class: 'mono' }, String(e.outlet).padStart(2, '0')), e.label && e.action !== 'Label' ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
+          h('td', null, h('span', { class: 'mono' }, String(e.num ?? e.outlet).padStart(2, '0')), e.label && e.action !== 'Label' ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
           h('td', null, ACT_NAMES[e.action] || e.action, e.action === 'Label' && e.label ? h('span', { class: 'muted' }, ` ${e.label}`) : null),
           h('td', null, e.ok ? h('span', { class: 'badge valid' }, 'OK') : h('span', { class: 'badge revoked', title: e.error || '' }, 'Fehler'))))))
         : h('p', { class: 'pad muted' }, 'Noch keine Schaltvorgänge auf dieser PDU.'));

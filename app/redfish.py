@@ -444,6 +444,12 @@ class PduClient:
             self.label_field = "ElectricalConsumerNames"
         self.request("PATCH", self._outlet(oid), {"ElectricalConsumerNames": [label] if label else []})
         self.invalidate()
+        # Rittal antwortet 200, speichert aber evtl. nicht → nachlesen
+        o = self.get(self._outlet(oid))
+        names = [n for n in (o.get("ElectricalConsumerNames") or []) if isinstance(n, str) and n.strip()]
+        if label and label not in names:
+            raise RedfishError("Die PDU hat die Änderung mit „OK“ beantwortet, aber nicht gespeichert "
+                               "(ElectricalConsumerNames bleibt leer) – Umbenennen per Redfish geht mit dieser Firmware nicht", 409)
 
 
 def normalize(client, pdu, res):
