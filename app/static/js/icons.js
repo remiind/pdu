@@ -29,3 +29,19 @@ const P = {
   thermo: '<path d="M10 14V5a2 2 0 0 1 4 0v9a4 4 0 1 1-4 0z"/><path d="M12 10v6"/>',
 };
 export const ico = (n, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${P[n] || ''}</svg>`;
+
+// Steckdosen-Ansicht (Blick auf die Buchse an der PDU), 22×18; Kontakte gefüllt, Umriss als Linie
+const OUT = {
+  // C13 (auch C14/C15): unten abgeschrägt, Schutzleiter oben mittig, L/N senkrecht unten
+  c13: '<path class="po" d="M2.5 2.5h17v8.5l-4.5 4.5h-8L2.5 11z"/><rect x="10" y="4.6" width="2" height="4.4" rx=".5"/><rect x="5.6" y="8" width="2" height="4.4" rx=".5"/><rect x="14.4" y="8" width="2" height="4.4" rx=".5"/>',
+  // C19 (auch C20/C21): rechteckig, Schutzleiter oben senkrecht, L/N waagerecht unten
+  c19: '<rect class="po" x="1.5" y="2.5" width="19" height="13" rx="1.6"/><rect x="10" y="4.6" width="2" height="4.6" rx=".5"/><rect x="4.4" y="10.8" width="5" height="2" rx=".5"/><rect x="12.6" y="10.8" width="5" height="2" rx=".5"/>',
+  // Schutzkontakt: rund, zwei Löcher, Erdungsbügel oben/unten
+  schuko: '<circle class="po" cx="11" cy="9" r="7"/><circle cx="7.6" cy="9" r="1.3"/><circle cx="14.4" cy="9" r="1.3"/><rect x="9.5" y="2" width="3" height="1.6" rx=".4"/><rect x="9.5" y="14.4" width="3" height="1.6" rx=".4"/>',
+};
+const OUT_OF = { C13: 'c13', C14: 'c13', C15: 'c13', C19: 'c19', C20: 'c19', C21: 'c19', Schuko: 'schuko' };
+// Icon zum Socket-Typ (leer, wenn unbekannt)
+export const plugIco = (type) => {
+  const k = OUT_OF[type];
+  return k ? `<svg class="pico" viewBox="0 0 22 18" aria-hidden="true">${OUT[k]}</svg>` : '';
+};

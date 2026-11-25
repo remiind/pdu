@@ -21,8 +21,9 @@ app/static/js/
   shell.js     Seitenleiste, Farbschema, picker() = PDU-Auswahl mit Live-Leistung (/api/pdus/summary alle 10 s), every() = Polling (pausiert im Hintergrund)
   monitor.js   Kacheln, Phasen mit Auslastungsbalken, Leistungsverlauf (nur im Browser, HIST, max. 1 h), Sicherungen, Sensoren, Socket-Tabelle
   control.js   kompakte Socket-Kacheln (2 Zeilen, Name .75rem → 20 Zeichen passen, 7 Spalten bei 1920 px, `.cmain` max. 1720 px; Balkenfarbe = Gruppe; in-place aktualisiert), Ansicht **Einbau** (Standard)/Phase/Gruppe/Liste (`prefs.view`, localStorage `pdu.control2`), Filter + Suche (auch Gruppe), Auswahl + Auswahlleiste (An/Aus/Neustart/Gruppe …), Bearbeiten-Dialog (Name auf der PDU + Gruppe in der App, Doppelklick), Protokoll
+  icons.js     ico() Linien-Icons · plugIco(type) = Buchsen-Icon (Blick auf die Buchse) für C13/C14/C15, C19/C20/C21, Schuko – im Typ-Chip (.tchip, .pico) in Steuerung und Monitoring
   explorer.js  Redfish-Rohdaten als Baum, Links auf @odata.id
-  users.js · login.js · ui.js · util.js · icons.js · theme.js · api.js · session.js
+  users.js · login.js · ui.js · util.js · theme.js · api.js · session.js
 tests/mock_redfish.py  make_pdu() = generische DMTF-PDU · make_rittal() = Nachbau der echten Rittal 7979340 inkl. /cgi-bin/json.cgi (Diagnose-Paket + rittal_probe 25.11.2026); CLI: `python tests/mock_redfish.py 9101 42 rittal`
 tools/rittal_probe.py  liest /cgi-bin/json.cgi der Rittal-Weboberfläche aus (createSession, getDeviceDescriptions …), nur lesend, Ausgabe ohne Passwort/Token
 tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht erreichbare
@@ -41,7 +42,7 @@ tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht err
 - Account braucht Redfish-Rechte (`apiuser` ohne Rechte → 401 auf Session und Basic).
 
 ## Ansicht „Einbau“
-- Die 42er-PDUs hängen mit **Socket 42 oben, 01 unten** (oben L3 42–29, darunter Controller, L2 28–15, unten L1 14–01; je Phase 2× C19 + 12× C13 in Blöcken). Ansicht `rack` in control.js: je Phase eine Spalte (`.rackgrid`/`.rackcol`), Spalten und Sockets in Einbaureihenfolge – `orient` `desc` (höchste Nummer oben → Spalten L3|L2|L1, absteigend) oder `asc` (umgekehrt). Gestrichelte Lücke (`.rgap`), wo der Socket-Typ wechselt. Kacheln dort einzeilig (gleiche Elemente, nur CSS: `.rackcol .srow { display: contents }` + `order`).
+- Die 42er-PDUs hängen mit **Socket 42 oben, 01 unten** (oben L3 42–29, darunter Controller, L2 28–15, unten L1 14–01; je Phase 2× C19 + 12× C13 in Blöcken). Ansicht `rack` in control.js: je Phase eine Spalte (`.rackgrid`/`.rackcol`), Spalten und Sockets in Einbaureihenfolge – `orient` `desc` (höchste Nummer oben → Spalten L3|L2|L1, absteigend) oder `asc` (umgekehrt). Gestrichelte Lücke (`.rgap`), wo der Socket-Typ wechselt. Kacheln dort einzeilig (gleiche Elemente, nur CSS: `.rackcol .srow { display: contents }` + `order`); Reihenfolge Auswahl · Nr · **Typ** (feste Breite, damit C13/C19 untereinander stehen) · Name · Gruppe · … · Schalter.
 - Einbaulage gilt je PDU für alle Benutzer: `$PDU_DATA/pdu-settings.json` `{pdu-key: {orient}}`, `PUT /api/pdus/<key>/settings {orient: desc|asc}` (braucht `control`), Momentaufnahme liefert `settings` (Standard `desc`). Knopf „42 oben ⇅“ in der Werkzeugleiste (nur in „Einbau“).
 
 ## Gruppen & Tempo
@@ -75,6 +76,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.5.2: Socket-Typ mit Buchsen-Icon (SVG, C13/C19/Schuko); in der Ansicht „Einbau“ steht der Typ direkt hinter der Nummer → C13/C19 bündig untereinander, auch wenn eine Gruppe angezeigt wird.
 - v0.5.1: Untertitel „Rittal · Redfish“ und Hilfezeile der Steuerung entfernt; PDU-Namen in PDU_LIST umbenennbar ohne Datenverlust (Übernahme über die Adresse).
 - v0.5.0: Ansicht „Einbau“ (Standard): je Phase eine Spalte, Sockets wie montiert (42 oben … 01 unten), Lücken zwischen den Socket-Blöcken, einzeilige Kacheln; Einbaulage je PDU umschaltbar und für alle gespeichert.
 - v0.4.2: Kein „0 Sockets“ mehr nach PDU-Wechsel (einzelne Ausfälle abgefangen, halbe Stände verworfen, weniger parallele Abrufe); Gruppenfarben am Kachelrand (Standard Türkis, jede Gruppe eigene, stabile Farbe); kleinere Namen (20 Zeichen lesbar), breitere Steuerungsseite.

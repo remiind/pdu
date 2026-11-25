@@ -139,6 +139,10 @@ th.sortable { cursor: pointer; user-select: none; } th.sortable:hover, th.sortab
 .gchip { --gc: var(--accent); color: var(--gc); background: color-mix(in srgb, var(--gc) 14%, transparent); border-radius: 6px; padding: 0 .4rem; font-weight: 650; max-width: 9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gdot { width: 10px; height: 10px; border-radius: 3px; background: var(--gc, var(--accent)); align-self: center; flex: none; }
 .s2 .tchip { font-size: .68rem; padding: 0 .35rem; }
+/* Socket-Typ mit Stecker-Icon (Blick auf die Buchse) */
+.tchip { display: inline-flex; align-items: center; gap: .28rem; white-space: nowrap; flex: none; }
+.pico { width: 14px; height: 11.5px; flex: none; fill: currentColor; opacity: .8; }
+.pico .po { fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
 .sinfo { color: var(--muted); white-space: nowrap; }
 .sock.pending .sinfo { color: var(--accent); font-weight: 600; }
 .slock { color: var(--warn); display: inline-flex; } .slock svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
@@ -198,8 +202,9 @@ a.jl { text-decoration: underline; text-decoration-style: dotted; }
 /* einzeilige Kachel: Auswahl · Nr · Name · Typ · Gruppe · Info · Aktionen · Schalter */
 .rackcol .sock { flex-direction: row; align-items: center; gap: .35rem; padding: .28rem .45rem .28rem .7rem; min-height: 34px; }
 .rackcol .srow { display: contents; }
-.rackcol .ssel { order: 1; } .rackcol .snum { order: 2; } .rackcol .slabel { order: 3; font-size: .8rem; }
-.rackcol .tchip { order: 4; } .rackcol .gchip { order: 5; font-size: .72rem; } .rackcol .sinfo { order: 6; font-size: .72rem; }
+.rackcol .ssel { order: 1; } .rackcol .snum { order: 2; } .rackcol .slabel { order: 4; font-size: .8rem; }
+/* Typ fest direkt hinter der Nummer → C13/C19 stehen untereinander, egal ob eine Gruppe folgt */
+.rackcol .tchip { order: 3; min-width: 3.55rem; } .rackcol .gchip { order: 5; font-size: .72rem; } .rackcol .sinfo { order: 6; font-size: .72rem; }
 .rackcol .slock { order: 7; } .rackcol .icb { order: 8; } .rackcol .switch { order: 9; margin-left: .15rem; }
 .rackcol .s2 .grow, .rackcol .sph { display: none; }
 .rackcol .s2 .icb { padding: .1rem; min-width: 22px; }

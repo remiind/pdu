@@ -4,7 +4,7 @@ import { api } from './api.js';
 import { session } from './session.js';
 import { confirmBox, modal, toast } from './ui.js';
 import { I, choosePdu, every, page, picker } from './shell.js';
-import { ico } from './icons.js';
+import { ico, plugIco } from './icons.js';
 
 const ACT_NAMES = { On: 'Einschalten', Off: 'Ausschalten', PowerCycle: 'Neu starten', Label: 'Umbenannt', Group: 'Gruppe' };
 const PREF = 'pdu.control2'; // neuer Schlüssel: Standardansicht ist jetzt „Einbau“
@@ -141,7 +141,9 @@ export async function renderControl(root, routeKey) {
       num.textContent = pad(o);
       label.textContent = title(o);
       label.title = [title(o), o.group && `Gruppe: ${o.group}`, o.name].filter(Boolean).join(' · ');
-      type.textContent = o.type || '';
+      type.innerHTML = o.type ? plugIco(o.type) : '';
+      type.append(o.type || '');
+      type.title = o.type ? `Socket-Typ ${o.type}` : '';
       type.hidden = !o.type;
       ph.textContent = o.phase || '';
       ph.hidden = !o.phase || prefs.view === 'phase' || prefs.view === 'rack';

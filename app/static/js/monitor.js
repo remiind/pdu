@@ -2,6 +2,7 @@
 import { ago, fmt, groupColor, h, setGroupColors, svgEl, watts } from './util.js';
 import { api } from './api.js';
 import { I, choosePdu, every, page, picker } from './shell.js';
+import { plugIco } from './icons.js';
 
 const HIST_MAX = 720; // 1 h bei 5 s
 const HIST = new Map(); // PDU → [{t, w}] (nur im Browser, solange die Seite offen ist)
@@ -142,7 +143,7 @@ export async function renderMonitor(root, routeKey) {
           h('td', { class: 'num mono' }, String(o.num ?? o.id).padStart(2, '0')),
           h('td', null, o.label || h('span', { class: 'muted' }, o.name || '–')),
           hasGroups && h('td', null, o.group ? (() => { const c = h('span', { class: 'gchip' }, o.group); c.style.setProperty('--gc', groupColor(o.group)); return c; })() : ''),
-          h('td', null, o.type ? h('span', { class: 'tchip' }, o.type) : '–'),
+          h('td', null, o.type ? h('span', { class: 'tchip', html: plugIco(o.type) }, o.type) : '–'),
           h('td', { class: 'muted' }, o.phase || '–'),
           h('td', null, stateBadge(o.state)),
           m && h('td', { class: 'r num' }, o.current === null ? '–' : `${fmt(o.current, 2)} A`),
