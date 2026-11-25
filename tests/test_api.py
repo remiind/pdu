@@ -123,5 +123,8 @@ def test_basic_fallback(tmp_path, monkeypatch):
         c2.post("/api/auth/login", json={"name": "daniel", "password": "geheim12345"})
         r = c2.get("/api/pdus/a")
         assert r.status_code == 502 and "Session: PDU meldet 401" in r.get_json()["error"] and "Basic: PDU meldet 401" in r.get_json()["error"]
+        n = m.app.state["calls"]
+        r = c2.get("/api/pdus/a?force=1")  # gesperrt: kein neuer Anmeldeversuch an der PDU
+        assert r.status_code == 502 and "nächster Versuch" in r.get_json()["error"] and m.app.state["calls"] == n
     finally:
         m.stop()

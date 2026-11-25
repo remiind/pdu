@@ -17,6 +17,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TIMEOUT = (4, 12)  # Verbindungsaufbau, Antwort
 ACTIONS = {"On", "Off", "PowerCycle"}
+AUTH_BACKOFF = 300  # Sekunden Pause nach fehlgeschlagener Anmeldung
 PHASE_RE = re.compile(r"(?:\bLine|\bL|\bPhase ?)([123])(?!\d)")
 
 
@@ -108,10 +109,18 @@ class PduClient:
         self.last_error = None
         self.last_ok = 0.0
         self.auth_mode = None
+        self.auth_block = 0.0  # nach fehlgeschlagener Anmeldung bis zu diesem Zeitpunkt keine neuen Versuche
+        self.auth_error = None
 
     # ---------- HTTP ----------
     def _login(self):
-        """Session anlegen; lehnt die PDU das ab, wird HTTP-Basic probiert. Fehler nennen Code + Text der PDU."""
+        """Session anlegen; lehnt die PDU das ab, wird HTTP-Basic probiert. Fehler nennen Code + Text der PDU.
+
+        Schlägt beides fehl, wird AUTH_BACKOFF Sekunden lang nicht neu angemeldet (die PDU könnte den
+        Account sonst nach zu vielen Fehlversuchen sperren).
+        """
+        if time.time() < self.auth_block:
+            raise RedfishError(f"{self.auth_error} – nächster Versuch in {int(self.auth_block - time.time())} s", 502)
         try:
             r = self.http.post(self.base + "/redfish/v1/SessionService/Sessions",
                                json={"UserName": self.user, "Password": self.password}, timeout=TIMEOUT)
@@ -135,7 +144,9 @@ class PduClient:
             return
         if not self.user or not self.password:
             raise RedfishError("PDU_USER/PDU_PASSWORD sind im Container nicht gesetzt (.env prüfen)", 502)
-        raise RedfishError(f"Anmeldung an der PDU fehlgeschlagen – Session: {sess_err}; Basic: {self._err_text(b)}", 502)
+        self.auth_error = f"Anmeldung an der PDU fehlgeschlagen – Session: {sess_err}; Basic: {self._err_text(b)}"
+        self.auth_block = time.time() + AUTH_BACKOFF
+        raise RedfishError(self.auth_error, 502)
 
     def _auth_headers(self):
         if self.token:
