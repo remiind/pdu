@@ -18,6 +18,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 TIMEOUT = (4, 12)  # Verbindungsaufbau, Antwort
 ACTIONS = {"On", "Off", "PowerCycle"}
 AUTH_BACKOFF = 300  # Sekunden Pause nach fehlgeschlagener Anmeldung
+CYCLE_PAUSE = 5  # Sekunden aus beim nachgebildeten Neustart (PDU kennt kein PowerCycle)
+# Chassis-Sensoren, die zusätzlich gelesen werden (nicht die je Socket)
+SENSOR_RE = re.compile(r"^(Energy_L[123]|Energy_(AC\d+_)?Total|Energy_AC\d+|Frequency.*|Current_N.*|Current_Neutral.*|Temperature.*|Humidity.*)$", re.I)
 PHASE_RE = re.compile(r"(?:\bLine|\bL|\bPhase ?)([123])(?!\d)")
 
 
@@ -105,7 +108,8 @@ class PduClient:
         self._snap_t = 0.0
         self._snap_lock = threading.Lock()
         self._pdu_path = None
-        self._expand = None  # None = unbekannt, True/False nach erstem Versuch
+        self._sens_ids = None  # Chassis-Sensoren (Energie je Phase, Frequenz …)
+        self._sens_t = 0.0
         self.last_error = None
         self.last_ok = 0.0
         self.auth_mode = None
@@ -213,23 +217,16 @@ class PduClient:
         return self._pdu_path
 
     def collection(self, path):
-        """Alle Mitglieder einer Collection voll geladen ($expand, sonst parallel einzeln)."""
-        if self._expand is not False:
-            try:
-                col = self.get(path + "?$expand=.($levels=1)")
-                mem = col.get("Members") or []
-                if all(isinstance(m, dict) and ("Id" in m or "Name" in m) for m in mem):
-                    self._expand = True
-                    return mem
-            except RedfishError as e:
-                if e.status not in (400, 404, 405, 501, 502):
-                    raise
-            self._expand = False
+        """Alle Mitglieder einer Collection, parallel einzeln geladen.
+
+        Kein $expand: Rittal (FW 10.2.1) meldet ExpandQuery, liefert dabei aber gekürzte Mitglieder
+        (ohne PowerState, OutletType, UserLabel, Actions).
+        """
         col = self.get(path)
         links = [_odata(m) for m in col.get("Members") or [] if _odata(m)]
         if not links:
             return []
-        with cf.ThreadPoolExecutor(max_workers=min(8, len(links))) as ex:
+        with cf.ThreadPoolExecutor(max_workers=min(12, len(links))) as ex:
             return list(ex.map(self.get, links))
 
     def _opt(self, fn, *a):
@@ -269,6 +266,28 @@ class PduClient:
         return {"power": _num(met.get("PowerWatts")), "on": None, "outlets": None, "model": pdu.get("Model"),
                 "health": _health(pdu.get("Status"))["health"]}
 
+    def chassis_sensor_ids(self, pdu):
+        """IDs interessanter Sensoren im Chassis der PDU (Liste 10 min zwischengespeichert)."""
+        if self._sens_ids is not None and time.time() - self._sens_t < 600:
+            return self._sens_ids
+        ch = [_odata(c) for c in ((pdu.get("Links") or {}).get("Chassis") or []) if _odata(c)]
+        paths = [_odata(pdu.get("Sensors"))] if pdu.get("Sensors") else []
+        paths += [c + "/Sensors" for c in ch]
+        ids = []
+        for sp in paths:
+            try:
+                col = self.get(sp)
+            except RedfishError:
+                continue
+            for m in col.get("Members") or []:
+                u = _odata(m)
+                if u and SENSOR_RE.search(u.rsplit("/", 1)[-1]):
+                    ids.append(u)
+            if ids:
+                break
+        self._sens_ids, self._sens_t = ids[:40], time.time()
+        return self._sens_ids
+
     def _build(self):
         pp = self.pdu_path()
         pdu = self.get(pp)
@@ -278,9 +297,8 @@ class PduClient:
             "branches": (self.collection, link("Branches", "Branches")),
             "outlets": (self.collection, link("Outlets", "Outlets")),
             "metrics": (self.get, link("Metrics", "Metrics")),
+            "sensors": (self._chassis_sensors, pdu),
         }
-        if pdu.get("Sensors"):
-            jobs["sensors"] = (self._sensors, _odata(pdu["Sensors"]))
         res = {}
         with cf.ThreadPoolExecutor(max_workers=len(jobs)) as ex:
             futs = {k: ex.submit(self._opt, fn, arg) for k, (fn, arg) in jobs.items()}
@@ -346,12 +364,12 @@ class PduClient:
         out["timing"]["gesamt"] = round(time.time() - t0, 2)
         return out
 
-    def _sensors(self, path):
-        col = self.get(path)
-        mem = col.get("Members") or []
-        if len(mem) > 40 and self._expand is False:
-            return []  # zu viele Einzelabfragen – Sensoren sind optional
-        return self.collection(path)
+    def _chassis_sensors(self, pdu):
+        ids = self.chassis_sensor_ids(pdu)
+        if not ids:
+            return []
+        with cf.ThreadPoolExecutor(max_workers=min(8, len(ids))) as ex:
+            return [x for x in ex.map(lambda u: self._opt(self.get, u), ids) if x]
 
     # ---------- Schalten / Beschriften ----------
     def _outlet(self, oid):
@@ -365,14 +383,32 @@ class PduClient:
         path = self._outlet(oid)
         target = path + "/Actions/Outlet.PowerControl"
         snap = self._snap
+        o = None
         if snap:
             o = next((x for x in snap["outlets"] if x["id"] == str(oid)), None)
             if o and o.get("target"):
                 target = o["target"]
             if o and o.get("locked"):
                 raise RedfishError("Socket ist gegen Schalten gesperrt", 409)
-        self.request("POST", target, {"PowerState": action})
+        allowed = (o or {}).get("allowed") if snap else None
+        if action == "PowerCycle" and allowed and "PowerCycle" not in allowed:
+            self.request("POST", target, {"PowerState": "Off"})
+            time.sleep(CYCLE_PAUSE)
+            self.request("POST", target, {"PowerState": "On"})
+        else:
+            self.request("POST", target, {"PowerState": action})
         self.invalidate()
+
+    def can_cycle(self, oid):
+        o = next((x for x in (self._snap or {}).get("outlets", []) if x["id"] == str(oid)), None)
+        return not o or not o.get("allowed") or "PowerCycle" in o["allowed"]
+
+    def post_state(self, oid, state):
+        """Einzelner Schaltbefehl ohne Neustart-Logik (für nachgebildeten Sammel-Neustart)."""
+        o = next((x for x in (self._snap or {}).get("outlets", []) if x["id"] == str(oid)), None)
+        if o and o.get("locked"):
+            raise RedfishError("Socket ist gegen Schalten gesperrt", 409)
+        self.request("POST", (o or {}).get("target") or self._outlet(oid) + "/Actions/Outlet.PowerControl", {"PowerState": state})
 
     def set_label(self, oid, label):
         self.request("PATCH", self._outlet(oid), {"UserLabel": label})
@@ -384,10 +420,13 @@ def normalize(client, pdu, res):
     loc = pdu.get("Location") or {}
     place = loc.get("Placement") or {}
     addr = loc.get("PostalAddress") or {}
-    location = " · ".join(x for x in [place.get("Row"), place.get("Rack"), place.get("RackOffset") and str(place.get("RackOffset")),
-                                       addr.get("Room"), addr.get("Location"), addr.get("Building")] if x)
+    # Platzhalter der Rittal-Werkseinstellung („Rack“, „Location“) nicht anzeigen
+    cand = {"Row": place.get("Row"), "Rack": place.get("Rack"), "RackOffset": place.get("RackOffset") and str(place.get("RackOffset")),
+            "Location": place.get("AdditionalInfo"), "Room": addr.get("Room"), "Building": addr.get("Building")}
+    location = " · ".join(v for k, v in cand.items() if v and str(v).strip().lower() != k.lower())
     info = {
-        "rfName": pdu.get("Name"), "model": pdu.get("Model"), "manufacturer": pdu.get("Manufacturer"),
+        "rfName": pdu.get("Name"), "model": " ".join(x for x in [pdu.get("PartNumber"), pdu.get("Description") or pdu.get("Model")] if x) or pdu.get("Model"),
+        "manufacturer": pdu.get("Manufacturer"),
         "serial": pdu.get("SerialNumber"), "part": pdu.get("PartNumber"), "firmware": pdu.get("FirmwareVersion"),
         "asset": pdu.get("AssetTag"), "userLabel": pdu.get("UserLabel"), "location": location or None,
         "equipmentType": pdu.get("EquipmentType"), **_health(pdu.get("Status")),
@@ -398,7 +437,7 @@ def normalize(client, pdu, res):
     mains = res.get("mains") or []
     for c in mains:
         pv, pc, pp, pe = (_poly(c, k) for k in ("PolyPhaseVoltage", "PolyPhaseCurrentAmps", "PolyPhasePowerWatts", "PolyPhaseEnergykWh"))
-        rated = _num(c.get("RatedCurrentAmps"))
+        rated = _num(c.get("RatedCurrentAmps")) or None
         if pv or pc or pp or pe:
             for ph in ("L1", "L2", "L3"):
                 if any(ph in d for d in (pv, pc, pp, pe)):
@@ -417,15 +456,42 @@ def normalize(client, pdu, res):
             totals["current"] = _num(c.get("CurrentAmps"))
     phase_list = [phases[k] for k in sorted(phases, key=lambda s: (not s.startswith("L"), s))]
 
+    # Chassis-Sensoren: Energie je Phase, Frequenz, Neutralleiter, Umwelt
+    sens = [x for x in (res.get("sensors") or []) if isinstance(x, dict)]
+    sens_energy = {}
+    for x in sens:
+        sid, rt, val = str(x.get("Id") or ""), x.get("ReadingType"), _num(x.get("Reading"))
+        if val is None:
+            continue
+        ph = _phase(x.get("ElectricalContext"), sid)
+        if rt in ("EnergykWh", "EnergyJoules", "EnergyWh") or sid.lower().startswith("energy"):
+            kwh = val / 3.6e6 if rt == "EnergyJoules" else val / 1000 if (rt == "EnergyWh" or x.get("ReadingUnits") == "Wh") else val
+            if ph and "Total" not in str(x.get("ElectricalContext")):
+                sens_energy[ph] = kwh
+            else:
+                sens_energy["total"] = kwh
+        elif rt == "Frequency" or sid.lower().startswith("frequency"):
+            totals["frequency"] = totals["frequency"] or val
+        elif sid.lower().startswith("current_n"):
+            totals["neutral"] = val
+    for p in phase_list:
+        if p["name"] in sens_energy:
+            p["energy"] = sens_energy[p["name"]]
+    if len(mains) == 1 and any(p["energy"] is not None for p in phase_list):
+        totals["energy"] = None  # Mains.EnergykWh zeigt bei Rittal auf einen einzelnen Phasenzähler
+
     met = res.get("metrics") or {}
     if _num(met.get("PowerWatts")) is not None:
         totals["power"] = _num(met.get("PowerWatts"))
-    if _num(met.get("EnergykWh")) is not None:
-        totals["energy"] = _num(met.get("EnergykWh"))
+    met_e = _num(met.get("EnergykWh"))
     if totals["power"] is None and phase_list and any(p["power"] is not None for p in phase_list):
         totals["power"] = sum(p["power"] or 0 for p in phase_list)
-    if totals["energy"] is None and phase_list and any(p["energy"] is not None for p in phase_list):
-        totals["energy"] = sum(p["energy"] or 0 for p in phase_list)
+    if totals["energy"] is None and phase_list and all(p["energy"] is not None for p in phase_list):
+        totals["energy"] = sum(p["energy"] for p in phase_list)
+    if totals["energy"] is None and "total" in sens_energy and sens_energy["total"] < 1e6:
+        totals["energy"] = sens_energy["total"]
+    if totals["energy"] is None and met_e is not None and met_e < 1e6:
+        totals["energy"] = met_e  # Rittal liefert hier teils einen Zähler in falscher Einheit (z. B. 10.194.415)
     env = {"temperature": _num(met.get("TemperatureCelsius")), "humidity": _num(met.get("HumidityPercent"))}
 
     # --- Abgänge / Sicherungen ---
@@ -434,7 +500,7 @@ def normalize(client, pdu, res):
         branches.append({
             "id": str(c.get("Id")), "name": c.get("UserLabel") or c.get("Name") or c.get("Id"),
             "phase": _phase(c.get("ElectricalContext"), c.get("Name"), c.get("Id")),
-            "breaker": c.get("BreakerState"), "powerState": c.get("PowerState"), "rated": _num(c.get("RatedCurrentAmps")),
+            "breaker": c.get("BreakerState"), "powerState": c.get("PowerState"), "rated": _num(c.get("RatedCurrentAmps")) or None,
             "current": _num(c.get("CurrentAmps")), "power": _num(c.get("PowerWatts")), "energy": _num(c.get("EnergykWh")),
             "voltage": _num(c.get("Voltage")), **_health(c.get("Status")),
         })
@@ -450,6 +516,7 @@ def normalize(client, pdu, res):
         links = o.get("Links") or {}
         branch = _odata(links.get("BranchCircuit"))
         act = (o.get("Actions") or {}).get("#Outlet.PowerControl") or {}
+        allowed = act.get("PowerState@Redfish.AllowableValues")
         m = re.search(r"(\d+)\s*$", oid) or re.search(r"(\d+)\s*$", str(o.get("Name") or ""))
         outlets.append({
             "id": oid, "num": int(m.group(1)) if m else None,
@@ -459,17 +526,23 @@ def normalize(client, pdu, res):
             "phase": _phase(o.get("ElectricalContext")) or branch_phase.get(branch),
             "branch": branch.rstrip("/").rsplit("/", 1)[-1] if branch else None,
             "current": _num(o.get("CurrentAmps")), "power": _num(o.get("PowerWatts")), "energy": _num(o.get("EnergykWh")),
-            "voltage": _num(o.get("Voltage")), "rated": _num(o.get("RatedCurrentAmps")),
-            "target": act.get("target"), **_health(o.get("Status")),
+            "voltage": _num(o.get("Voltage")), "rated": _num(o.get("RatedCurrentAmps")) or None,
+            "target": act.get("target"), "allowed": allowed if isinstance(allowed, list) else None, **_health(o.get("Status")),
         })
     outlets.sort(key=lambda x: (x["num"] is None, x["num"] or 0, x["id"]))
+    # Keine Messung je Socket (Rittal PDU-SWI/MAN meldet überall 0,0 A, aber Phasen tragen Last) → als „nicht gemessen“ behandeln
+    metering = any((o["current"] or 0) > 0 or (o["power"] or 0) > 0 for o in outlets)
+    phase_load = any((p["current"] or 0) > 0.05 for p in phase_list)
+    if not metering and phase_load:
+        for o in outlets:
+            o["current"] = o["power"] = o["energy"] = None
     if totals["power"] is None and outlets and any(o["power"] is not None for o in outlets):
         totals["power"] = sum(o["power"] or 0 for o in outlets)
 
     sensors = []
-    for s in res.get("sensors") or []:
+    for s in sens:
         rt = s.get("ReadingType")
-        if rt in ("Temperature", "Humidity", "AirFlow", "Pressure", "Altitude", "AbsoluteHumidity", "LeakDetection", "Contact") or not rt:
+        if rt in ("Temperature", "Humidity", "AirFlow", "Pressure", "Altitude", "AbsoluteHumidity", "LeakDetection", "Contact"):
             if _num(s.get("Reading")) is None:
                 continue
             sensors.append({"id": str(s.get("Id")), "name": s.get("Name") or s.get("Id"), "type": rt, "reading": _num(s.get("Reading")),
@@ -479,5 +552,6 @@ def normalize(client, pdu, res):
         "key": client.key, "name": client.name, "host": client.host, "ts": time.time(),
         "info": info, "phases": phase_list, "totals": totals, "env": env,
         "branches": branches, "outlets": outlets, "sensors": sensors,
+        "metering": metering,
         "counts": {"outlets": len(outlets), "on": sum(1 for o in outlets if o["state"] == "On"), "off": sum(1 for o in outlets if o["state"] == "Off")},
     }

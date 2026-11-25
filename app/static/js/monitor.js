@@ -128,11 +128,12 @@ export async function renderMonitor(root, routeKey) {
       return (typeof va === 'string' ? va.localeCompare(vb, 'de', { numeric: true }) : va - vb) * state.dir || (a.num - b.num);
     });
     const maxP = Math.max(1, ...snap.outlets.map((o) => o.power || 0));
+    const m = snap.metering !== false; // PDU misst je Socket (sonst Spalten ausblenden)
     const th = (k2, label, cls = '') => h('th', { class: cls + ' sortable' + (state.sort === k2 ? ' on' : ''), onclick: () => { state.dir = state.sort === k2 ? -state.dir : (['power', 'current', 'energy'].includes(k2) ? -1 : 1); state.sort = k2; draw(); } },
       label, state.sort === k2 ? (state.dir > 0 ? ' ↑' : ' ↓') : '');
     return h('table', { class: 'data stable' },
       h('thead', null, h('tr', null, th('num', 'Nr'), th('label', 'Beschreibung'), th('type', 'Typ'), th('phase', 'Phase'), th('state', 'Status'),
-        th('current', 'Strom', 'r'), th('power', 'Leistung', 'r'), th('energy', 'Energie', 'r'))),
+        m && th('current', 'Strom', 'r'), m && th('power', 'Leistung', 'r'), m && th('energy', 'Energie', 'r'))),
       h('tbody', null, rows.length ? rows.map((o) => {
         const bar = h('span', { class: 'ibar' });
         bar.style.width = `${((o.power || 0) / maxP) * 100}%`;
@@ -142,10 +143,10 @@ export async function renderMonitor(root, routeKey) {
           h('td', null, o.type ? h('span', { class: 'tchip' }, o.type) : '–'),
           h('td', { class: 'muted' }, o.phase || '–'),
           h('td', null, stateBadge(o.state)),
-          h('td', { class: 'r num' }, o.current === null ? '–' : `${fmt(o.current, 2)} A`),
-          h('td', { class: 'r num pcell' }, h('span', { class: 'itrack' }, bar), o.power === null ? '–' : watts(o.power)),
-          h('td', { class: 'r num muted' }, o.energy === null ? '–' : `${fmt(o.energy, 1)} kWh`));
-      }) : h('tr', null, h('td', { colspan: 8, class: 'empty' }, 'Kein Socket passt zur Suche.'))));
+          m && h('td', { class: 'r num' }, o.current === null ? '–' : `${fmt(o.current, 2)} A`),
+          m && h('td', { class: 'r num pcell' }, h('span', { class: 'itrack' }, bar), o.power === null ? '–' : watts(o.power)),
+          m && h('td', { class: 'r num muted' }, o.energy === null ? '–' : `${fmt(o.energy, 1)} kWh`));
+      }) : h('tr', null, h('td', { colspan: m ? 8 : 5, class: 'empty' }, 'Kein Socket passt zur Suche.'))));
   }
 
   const sockWrap = h('div', { class: 'scroll' });
@@ -171,7 +172,8 @@ export async function renderMonitor(root, routeKey) {
     const hist = HIST.get(s.key) || [];
     const chartCard = h('div', { class: 'card' }, h('div', { class: 'cardhead0' }, h('h2', null, 'Gesamtleistung – Verlauf'), h('span', { class: 'muted small' }, hist.length > 1 ? `seit ${new Date(hist[0].t * 1000).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr` : '')), powerChart(hist));
     const has = (k) => s.branches.some((b) => b[k] !== null && b[k] !== undefined);
-    const branchCard = s.branches.length ? h('div', { class: 'card flush' }, h('div', { class: 'cardhead' }, h('h2', null, 'Sicherungen / Abgänge')),
+    const redundant = s.branches.every((b) => b.phase && !b.breaker && s.phases.some((p) => p.name === b.phase));
+    const branchCard = s.branches.length && !redundant ? h('div', { class: 'card flush' }, h('div', { class: 'cardhead' }, h('h2', null, 'Sicherungen / Abgänge')),
       h('div', { class: 'scroll' }, h('table', { class: 'data' },
         h('thead', null, h('tr', null, h('th', null, 'Name'), has('phase') && h('th', null, 'Phase'), h('th', null, 'Zustand'), has('current') && h('th', { class: 'r' }, 'Strom'),
           has('current') && h('th', null, 'Auslastung'), has('power') && h('th', { class: 'r' }, 'Leistung'))),
@@ -194,9 +196,13 @@ export async function renderMonitor(root, routeKey) {
         h('a', { class: 'btn', href: `#/control/${s.key}` }, I('power'), 'Zur Steuerung'))),
       h('div', { class: 'tiles' },
         tile(watts(t.power), 'Leistung gesamt', '', 'bolt'),
-        tile(t.energy === null ? '–' : `${fmt(t.energy, 1)}`, 'Energie (kWh)', 'mute', 'pulse'),
+        tile(t.energy === null ? '–' : `${fmt(t.energy, 1)}`, 'Energie gesamt (kWh)', 'mute', 'pulse'),
         tile(`${s.counts.on} / ${s.counts.outlets}`, 'Sockets eingeschaltet', s.counts.off ? 'warn' : 'ok', 'plug'),
-        tile(t.current !== null ? `${fmt(t.current, 2)} A` : t.neutral !== null ? `${fmt(t.neutral, 2)} A` : '–', t.current !== null ? 'Strom gesamt' : 'Strom Neutralleiter', 'mute', 'pulse')),
+        (() => {
+          const hi = s.phases.filter((p) => p.current !== null).sort((a, b) => b.current - a.current)[0];
+          return hi ? tile(`${fmt(hi.current, 2)} A`, `Höchste Phasenlast (${hi.name})`, 'mute', 'pulse')
+            : tile(t.neutral !== null ? `${fmt(t.neutral, 2)} A` : '–', 'Strom Neutralleiter', 'mute', 'pulse');
+        })()),
       h('div', { class: 'grid2 mgrid' }, phaseCard, chartCard),
       (branchCard || sensorCard) && h('div', { class: 'grid2' }, branchCard, sensorCard),
       h('div', { class: 'card flush' }, h('div', { class: 'cardhead' }, h('h2', null, `Sockets (${s.outlets.length})`), h('label', { class: 'mini' }, search)), sockWrap)].filter(Boolean));

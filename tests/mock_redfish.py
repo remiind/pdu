@@ -162,6 +162,154 @@ def make_pdu(n_outlets=42, expand=False, model="PDU-SWI 7979340", sessions=True)
     return app
 
 
+def make_rittal(n_outlets=42, sid="43090021"):
+    """Nachbau des echten Verhaltens einer Rittal PDU-SWI 7979340 (FW 10.2.1), siehe Diagnose-Paket:
+    Outlet-IDs „L3_34“, Readings als Excerpt mit DataSourceUri, kein Strom je Socket (0,0 A),
+    PowerControl nur On/Off, $expand liefert gekürzte Mitglieder, Energie je Phase nur als Chassis-Sensor,
+    Metrics.EnergykWh in falscher Einheit, RackPDUs/<id>/Sensors → 405."""
+    app = Flask("mock-rittal")
+    tokens = set()
+    P = f"/redfish/v1/PowerEquipment/RackPDUs/{sid}"
+    C = f"/redfish/v1/Chassis/PDU_{sid}"
+    per = -(-n_outlets // 3)
+    outlets = {}
+    for i in range(1, n_outlets + 1):
+        ph = min(3, (i - 1) // per + 1)
+        outlets[f"L{ph}_{i}"] = {"num": i, "phase": ph, "on": True, "label": f"Socket {i}" if i > 3 else f"OT Teststack{i}",
+                                 "type": "IEC_60320_C19" if (i - 1) % per >= per - 2 else "IEC_60320_C13"}
+    state = {"calls": 0, "actions": []}
+    ex = lambda u, v: {"DataSourceUri": u, "Reading": v}  # noqa: E731
+    cur = {1: 0.32, 2: 0.66, 3: 1.61}
+    pw = {1: 43.0, 2: 133.0, 3: 291.0}
+    vol = {1: 227.8, 2: 226.7, 3: 227.1}
+    en = {1: 17.4, 2: 22.4, 3: 235.2}
+
+    @app.before_request
+    def check():
+        state["calls"] += 1
+        if request.path == "/redfish/v1/SessionService/Sessions" and request.method == "POST":
+            return None
+        if request.headers.get("X-Auth-Token") in tokens:
+            return None
+        return jsonify(error={"code": "Base.1.21.Unauthorized", "message": "Authentication is required and has failed or has not been provided"}), 401
+
+    @app.post("/redfish/v1/SessionService/Sessions")
+    def login():
+        b = request.get_json(force=True)
+        if b.get("UserName") != USER or b.get("Password") != PASSWORD:
+            return jsonify(error={"code": "Base.1.21.Unauthorized", "message": "Authentication is required and has failed or has not been provided"}), 401
+        t = secrets.token_hex(8)
+        tokens.add(t)
+        r = jsonify({"Id": t[:4]})
+        r.headers["X-Auth-Token"] = t
+        r.headers["Location"] = "/redfish/v1/SessionService/Sessions/" + t[:4]
+        return r, 201
+
+    def outlet_json(oid, short=False):
+        o = outlets[oid]
+        d = {"@odata.id": f"{P}/Outlets/{oid}", "Id": oid, "Name": f"Outlet {oid}", "ElectricalContext": f"Line{o['phase']}ToNeutral",
+             "NominalVoltage": "AC230V", "PhaseWiringType": "OnePhase3Wire", "RatedCurrentAmps": 0.0, "Status": {"Health": "OK", "State": "Enabled"},
+             "CurrentAmps": {}, "Links": {"BranchCircuit": {}}}
+        if short:
+            return d
+        d.update({"CurrentAmps": ex(f"{C}/Sensors/Current_L{o['phase']}_{o['num']}", 0.0), "OutletType": o["type"], "PowerState": "On" if o["on"] else "Off",
+                  "PowerEnabled": True, "UserLabel": o["label"], "Links": {"BranchCircuit": {"@odata.id": f"{P}/Branches/L{o['phase']}"}},
+                  "Actions": {"#Outlet.PowerControl": {"PowerState@Redfish.AllowableValues": ["On", "Off"], "target": f"{P}/Outlets/{oid}/Actions/Outlet.PowerControl"}}})
+        return d
+
+    @app.get("/redfish/v1")
+    def root():
+        return jsonify({"@odata.id": "/redfish/v1", "Vendor": "Rittal GmbH & Co. KG", "PowerEquipment": {"@odata.id": "/redfish/v1/PowerEquipment"},
+                        "ProtocolFeaturesSupported": {"ExpandQuery": {"ExpandAll": True, "Levels": True, "MaxLevels": 5}}})
+
+    @app.get("/redfish/v1/PowerEquipment/RackPDUs")
+    def pdus():
+        return jsonify({"Members": [{"@odata.id": P}], "Members@odata.count": 1})
+
+    @app.get(P)
+    def pdu():
+        return jsonify({"@odata.id": P, "Id": sid, "Name": "Rittal PDU Controller", "Description": "PDU-SWI", "Model": "PDU-MAN", "PartNumber": "7979340",
+                        "SerialNumber": sid, "FirmwareVersion": "v10.2.1", "Manufacturer": "Rittal GmbH & Co. KG", "UserLabel": "PDU-MAN",
+                        "Location": {"Placement": {"AdditionalInfo": "Location", "Rack": "Rack"}}, "Status": {"Health": "OK", "State": "Enabled"},
+                        "Links": {"Chassis": [{"@odata.id": C}]}, "Mains": {"@odata.id": P + "/Mains"}, "Branches": {"@odata.id": P + "/Branches"},
+                        "Outlets": {"@odata.id": P + "/Outlets"}, "Metrics": {"@odata.id": P + "/Metrics"}})
+
+    @app.get(P + "/Sensors")
+    def no_sensors():
+        return jsonify(error={"code": "Base.1.21.OperationNotAllowed", "message": "The requested operation is not implemented."}), 405
+
+    @app.get(P + "/Mains")
+    def mains():
+        return jsonify({"Members": [{"@odata.id": P + "/Mains/AC1"}]})
+
+    @app.get(P + "/Mains/AC1")
+    def ac1():
+        return jsonify({"Id": "AC1", "Name": "Mains AC Input", "CircuitType": "Mains", "ElectricalContext": "Total", "NominalFrequencyHz": 0.0,
+                        "EnergykWh": ex(f"{C}/Sensors/Energy_L3", en[3]), "RatedCurrentAmps": 0.0, "PowerState": "On",
+                        "PolyPhaseCurrentAmps": {f"Line{k}": ex(f"{C}/Sensors/Current_L{k}", cur[k]) for k in (1, 2, 3)},
+                        "PolyPhasePowerWatts": {f"Line{k}ToNeutral": ex(f"{C}/Sensors/Power_L{k}", pw[k]) for k in (1, 2, 3)},
+                        "PolyPhaseVoltage": {f"Line{k}ToNeutral": ex(f"{C}/Sensors/Voltage_L{k}", vol[k]) for k in (1, 2, 3)},
+                        "PowerWatts": ex(f"{C}/Sensors/Power_AC1_Total", sum(pw.values())), "Status": {"Health": "OK", "State": "Enabled"}})
+
+    @app.get(P + "/Branches")
+    def branches():
+        return jsonify({"Members": [{"@odata.id": f"{P}/Branches/L{k}"} for k in (1, 2, 3)]})
+
+    @app.get(P + "/Branches/<b>")
+    def branch(b):
+        k = int(b[1])
+        return jsonify({"Id": b, "Name": f"Branch Circuit {b}", "CurrentAmps": ex("", cur[k]), "PowerWatts": ex("", pw[k]),
+                        "PolyPhaseVoltage": {f"Line{k}ToNeutral": ex("", vol[k])}})
+
+    @app.get(P + "/Metrics")
+    def metrics():
+        return jsonify({"EnergykWh": ex(f"{C}/Sensors/Energy_AC1_Total", 10194415.0), "PowerWatts": ex(f"{C}/Sensors/Power_AC1_Total", sum(pw.values()))})
+
+    @app.get(P + "/Outlets")
+    def outl():
+        if "$expand" in request.query_string.decode():
+            return jsonify({"Members": [outlet_json(i, short=True) for i in outlets], "Members@odata.count": len(outlets)})
+        return jsonify({"Members": [{"@odata.id": f"{P}/Outlets/{i}"} for i in outlets], "Members@odata.count": len(outlets)})
+
+    @app.get(P + "/Outlets/<oid>")
+    def outlet(oid):
+        return jsonify(outlet_json(oid))
+
+    @app.patch(P + "/Outlets/<oid>")
+    def patch(oid):
+        outlets[oid]["label"] = request.get_json(force=True).get("UserLabel", outlets[oid]["label"])
+        return "", 204
+
+    @app.post(P + "/Outlets/<oid>/Actions/Outlet.PowerControl")
+    def power(oid):
+        ps = request.get_json(force=True).get("PowerState")
+        if ps not in ("On", "Off"):
+            return jsonify(error={"code": "Base.1.21.ActionParameterValueNotInList", "message": f"The value {ps} is not in the list"}), 400
+        state["actions"].append((oid, ps))
+        outlets[oid]["on"] = ps == "On"
+        return "", 204
+
+    sensors = {f"Energy_L{k}": ("EnergykWh", "kWh", en[k], f"Line{k}ToNeutral") for k in (1, 2, 3)}
+    sensors["Energy_AC1_Total"] = ("EnergykWh", "kWh", 10194415.0, "Total")
+    sensors["Frequency_AC1"] = ("Frequency", "Hz", 50.0, "Total")
+
+    @app.get(C + "/Sensors")
+    def csensors():
+        ids = list(sensors) + [f"Current_L{k}" for k in (1, 2, 3)] + [f"Current_L{o['phase']}_{o['num']}" for o in outlets.values()]
+        return jsonify({"Members": [{"@odata.id": f"{C}/Sensors/{i}"} for i in ids]})
+
+    @app.get(C + "/Sensors/<i>")
+    def csensor(i):
+        if i not in sensors:
+            return jsonify({"Id": i, "Reading": 0.0})
+        rt, u, v, ctx = sensors[i]
+        return jsonify({"Id": i, "Name": i, "ReadingType": rt, "ReadingUnits": u, "Reading": v, "ElectricalContext": ctx})
+
+    app.state = state
+    app.outlets = outlets
+    return app
+
+
 class Running:
     def __init__(self, app, port=0):
         self.srv = make_server("127.0.0.1", port, app, threaded=True)
@@ -178,4 +326,6 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9101
     n = int(sys.argv[2]) if len(sys.argv) > 2 else 42
     random.seed(port)
-    make_pdu(n, expand=len(sys.argv) > 3).run(port=port, threaded=True)
+    mode = sys.argv[3] if len(sys.argv) > 3 else ""
+    app = make_rittal(n) if mode == "rittal" else make_pdu(n, expand=mode == "expand")
+    app.run(port=port, threaded=True)

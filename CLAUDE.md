@@ -12,7 +12,7 @@ Weboberfläche für Rittal-PDUs (7979310 = 10 Sockets, 7979340 = 42 Sockets, Fir
 ## Aufbau
 ```
 app/__init__.py   Flask-App: PDU-Liste aus PDU_LIST, JSON-API, Schaltprotokoll, Sicherheits-Header (CSP, HSTS), HTTPS-Pflicht
-app/redfish.py    PduClient (Session-Token, Retry bei 401; lehnt die PDU die Session ab → Basic-Auth, `auth_mode`; Fehlermeldung nennt Code + Text der PDU für beide Wege; nach Fehlschlag 300 s keine neuen Anmeldeversuche (`AUTH_BACKOFF`, schützt vor Account-Sperre); $expand oder parallele Einzelabrufe, Cache) + normalize()
+app/redfish.py    PduClient (Collections immer einzeln parallel laden – **kein $expand**, Rittal liefert dabei gekürzte Mitglieder; Session-Token, Retry bei 401; lehnt die PDU die Session ab → Basic-Auth, `auth_mode`; Fehlermeldung nennt Code + Text der PDU für beide Wege; nach Fehlschlag 300 s keine neuen Anmeldeversuche (`AUTH_BACKOFF`, schützt vor Account-Sperre); $expand oder parallele Einzelabrufe, Cache) + normalize()
 app/auth.py       Benutzer/Login aus Plan übernommen (users.json, scrypt, Cookie pdu_session); Flag `control` (False = nur ansehen)
 app/templates/index.html  SPA, lädt js/app.js
 app/static/js/
@@ -22,9 +22,19 @@ app/static/js/
   control.js   Socket-Kacheln (in-place aktualisiert, Gruppen nach Phase), Filter, Auswahl + Auswahlleiste, Bestätigung bei Aus/Neustart, Umbenennen, Protokoll
   explorer.js  Redfish-Rohdaten als Baum, Links auf @odata.id
   users.js · login.js · ui.js · util.js · icons.js · theme.js · api.js · session.js
-tests/mock_redfish.py  simulierte PDU (Sessions, Mains mit PolyPhase*, Branches F1/F2, Outlets, PowerControl, PATCH UserLabel, optional $expand)
+tests/mock_redfish.py  make_pdu() = generische DMTF-PDU · make_rittal() = Nachbau der echten Rittal 7979340 (Diagnose-Paket 25.11.2026); CLI: `python tests/mock_redfish.py 9101 42 rittal`
 tests/test_api.py      Backend-Tests gegen zwei simulierte PDUs + eine nicht erreichbare
 ```
+
+## Rittal-Besonderheiten (FW 10.2.1, echte Daten)
+- RackPDU-Id = Seriennummer (`/RackPDUs/43090021`), `Model` „PDU-MAN“, `PartNumber` 7979340, `Description` „PDU-SWI“ → Anzeige „7979340 PDU-SWI“; Placement-Platzhalter „Rack“/„Location“ werden ausgeblendet.
+- Outlet-IDs `L<Phase>_<Nr>` (z. B. `L3_34`), Collection unsortiert → nach Nummer sortiert. Phase aus `ElectricalContext`.
+- Messwerte als Excerpt `{DataSourceUri, Reading}`; Sensoren liegen unter `/redfish/v1/Chassis/PDU_<SN>/Sensors` (`/RackPDUs/<id>/Sensors` → 405). Gelesen werden nur Sensoren nach `SENSOR_RE` (Energy_L1..3, Frequency…, Current_N…, Temperatur/Feuchte), Liste 10 min gecacht.
+- Mains AC1: `PolyPhaseCurrentAmps` mit Schlüsseln `Line1..3`, Spannung/Leistung `LineXToNeutral`; `EnergykWh` zeigt fälschlich auf Energy_L3; `Metrics.EnergykWh` = 10.194.415 (falsche Einheit) → Gesamtenergie = Summe Energy_L1..3.
+- Sockets ohne eigene Messung (CurrentAmps 0,0, kein PowerWatts) → `metering:false`, Strom/Leistung je Socket = null, Spalten werden ausgeblendet.
+- `Outlet.PowerControl` erlaubt nur On/Off → Neustart wird nachgebildet: einzeln Aus → `CYCLE_PAUSE` (5 s) → An; Auswahl: alle aus, warten, alle an.
+- Branches L1–L3 entsprechen den Phasen → Karte „Sicherungen“ wird dann ausgeblendet.
+- Account braucht Redfish-Rechte (`apiuser` ohne Rechte → 401 auf Session und Basic).
 
 ## API
 - `GET /api/pdus` → `{pdus:[{key,name,group,host,error}], control}` · `GET /api/pdus/summary` → je PDU `{ok,power,model,health|error}` (nutzt Momentaufnahme < 15 s, sonst nur PDU + Metrics)
@@ -50,6 +60,7 @@ docker compose up -d --build                                     # docksrv (Netz
 ```
 
 ## Status / Ideen
+- v0.2.0: Anpassung an echte Rittal-Daten (siehe „Rittal-Besonderheiten“): kein $expand, Chassis-Sensoren, Energie je Phase, Neustart-Nachbildung, Sockets ohne Messung, Kachel „Höchste Phasenlast“.
 - v0.1.3: Diagnose-Paket im Redfish-Explorer; Kurzstatus der PDU-Auswahl fängt alle Fehler je PDU ab.
 - v0.1.2: Nach fehlgeschlagener Anmeldung 5 min Pause je PDU (keine Account-Sperre durch Dauer-Fehlversuche).
 - v0.1.1: Anmeldung: Rückfall auf Basic-Auth, wenn die PDU keine Session anlegt; ausführliche Fehlermeldung.

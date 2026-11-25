@@ -10,9 +10,10 @@ from flask import Flask, abort, g, jsonify, redirect, request, send_from_directo
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .auth import can_control, init_auth
+from . import redfish
 from .redfish import ACTIONS, PduClient, RedfishError
 
-VERSION = "0.1.3"
+VERSION = "0.2.0"
 LABEL_MAX = 64
 
 CSP = (
@@ -212,6 +213,25 @@ def create_app(data_dir=None, pdus=None, secure_cookies=None):
         if not isinstance(ids, list) or not 1 <= len(ids) <= 64 or not all(isinstance(i, str) for i in ids):
             abort(400, "Keine Sockets gewählt")
         results = {}
+        if action == "PowerCycle" and not all(c.can_cycle(i) for i in ids):
+            # PDU kennt kein PowerCycle → alle aus, kurz warten, alle wieder an (nicht jeden Socket einzeln 5 s)
+            for oid in ids:
+                try:
+                    c.post_state(oid, "Off")
+                    results[oid] = {"ok": True}
+                except RedfishError as e:
+                    results[oid] = {"ok": False, "error": str(e)}
+            time.sleep(redfish.CYCLE_PAUSE)
+            for oid in ids:
+                if results[oid]["ok"]:
+                    try:
+                        c.post_state(oid, "On")
+                    except RedfishError as e:
+                        results[oid] = {"ok": False, "error": f"wieder einschalten: {e}"}
+            c.invalidate()
+            for oid in ids:
+                audit(c, oid, action, results[oid]["ok"], results[oid].get("error"), label_of(c, oid))
+            return jsonify(results=results, ok=all(r["ok"] for r in results.values()))
         for oid in ids:  # nacheinander, damit die PDU nicht überlastet wird
             lbl = label_of(c, oid)
             try:

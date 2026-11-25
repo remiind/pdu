@@ -1,7 +1,7 @@
 import pytest
 
 from app import create_app, parse_list
-from tests.mock_redfish import Running, make_pdu
+from tests.mock_redfish import Running, make_pdu, make_rittal
 
 
 @pytest.fixture(scope="module")
@@ -136,3 +136,36 @@ def test_diag(client):
     d = r.get_json()
     assert d["auth_mode"] == "Session" and "/redfish/v1/PowerEquipment/RackPDUs/1/Outlets/1" in d["data"]
     assert "mock-secret" not in r.get_data(as_text=True)
+
+
+def test_rittal_real(tmp_path, monkeypatch):
+    """Verhalten der echten Rittal-PDU (Diagnose-Paket 25.11.2026)."""
+    import app.redfish as rf
+    monkeypatch.setattr(rf, "CYCLE_PAUSE", 0.05)
+    m = Running(make_rittal(42))
+    try:
+        monkeypatch.setenv("PDU_USER", "apiuser")
+        monkeypatch.setenv("PDU_PASSWORD", "mock-secret-123")
+        app = create_app(str(tmp_path), pdus=parse_list(f"Labor/R={m.url}"), secure_cookies=False)
+        c = app.test_client()
+        c.post("/api/auth/setup", json={"name": "daniel", "password": "geheim12345"})
+        s = c.get("/api/pdus/r").get_json()
+        o = s["outlets"]
+        assert [x["num"] for x in o] == list(range(1, 43)) and o[0]["id"] == "L1_1" and o[33]["id"] == "L3_34"
+        assert s["counts"]["on"] == 42 and o[0]["type"] == "C13" and o[0]["label"] == "OT Teststack1" and o[41]["phase"] == "L3"
+        assert o[0]["current"] is None and s["metering"] is False  # 0,0 A je Socket = nicht gemessen
+        assert [p["name"] for p in s["phases"]] == ["L1", "L2", "L3"]
+        assert s["phases"][2]["current"] == 1.61 and s["phases"][0]["voltage"] == 227.8 and s["phases"][1]["power"] == 133.0
+        assert s["phases"][0]["energy"] == 17.4 and round(s["totals"]["energy"], 1) == 275.0  # Summe der Phasen, nicht 10.194.415
+        assert s["totals"]["frequency"] == 50.0 and s["totals"]["power"] == 467.0
+        assert s["info"]["model"] == "7979340 PDU-SWI" and s["info"]["location"] is None
+        # Neustart einzeln: Aus + An
+        assert c.post("/api/pdus/r/outlets/L1_5/power", json={"action": "PowerCycle"}).status_code == 200
+        assert m.app.state["actions"][-2:] == [("L1_5", "Off"), ("L1_5", "On")]
+        # Neustart als Auswahl: erst alle aus, dann alle an
+        r = c.post("/api/pdus/r/power", json={"ids": ["L1_6", "L1_7"], "action": "PowerCycle"}).get_json()
+        assert r["ok"] and m.app.state["actions"][-4:] == [("L1_6", "Off"), ("L1_7", "Off"), ("L1_6", "On"), ("L1_7", "On")]
+        assert c.post("/api/pdus/r/outlets/L1_8/power", json={"action": "Off"}).status_code == 200
+        assert c.get("/api/pdus/r").get_json()["counts"]["off"] == 1
+    finally:
+        m.stop()
